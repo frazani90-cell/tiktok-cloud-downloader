@@ -28,6 +28,7 @@ jobs:
           USERNAMES=(
             "_.meli._06"
             "sarahmeelo_"
+            "beylinyuc"
           )
 
           for USERNAME in "${USERNAMES[@]}"; do
