@@ -10,7 +10,7 @@ jobs:
     steps:
       - name: Install tools
         run: |
-          python -m pip install -U "yt-dlp[default,curl-cffi]"
+          python -m pip install -U --pre "yt-dlp[default,curl-cffi]"
           sudo apt-get update
           sudo apt-get install -y ffmpeg rclone
 
@@ -23,7 +23,7 @@ jobs:
 
       - name: Download new TikTok videos
         run: |
-          USERNAME="sarahmelo_"
+          USERNAME="sarahmeelo_"
           mkdir -p "$HOME/tiktok/$USERNAME"
 
           rclone copyto \
@@ -47,7 +47,7 @@ jobs:
       - name: Upload to Google Drive
         if: always()
         run: |
-          USERNAME="sarahmelo_"
+          USERNAME="sarahmeelo_"
 
           rclone copy \
             "$HOME/tiktok/$USERNAME" \
