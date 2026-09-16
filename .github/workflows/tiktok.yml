@@ -37,74 +37,80 @@ jobs:
 
             FOLDER="$HOME/tiktok/$USERNAME"
             ARCHIVE="$FOLDER/archive.txt"
+            START_FILE="$FOLDER/start_epoch.txt"
 
             mkdir -p "$FOLDER"
 
+            # Load the monitoring start time.
+            # If this username has never been monitored before,
+            # monitoring starts NOW.
+            if rclone copyto \
+              "gdrive:TikTok/$USERNAME/start_epoch.txt" \
+              "$START_FILE" \
+              2>/dev/null
+            then
+              echo "Existing monitoring start time found."
+            else
+              echo "First time monitoring @$USERNAME"
+              date +%s > "$START_FILE"
+
+              rclone copyto \
+                "$START_FILE" \
+                "gdrive:TikTok/$USERNAME/start_epoch.txt"
+            fi
+
+            START_EPOCH="$(tr -d '[:space:]' < "$START_FILE")"
+
+            echo "Monitoring posts from timestamp: $START_EPOCH"
+
+            # Load archive of videos already downloaded.
             if rclone copyto \
               "gdrive:TikTok/$USERNAME/archive.txt" \
               "$ARCHIVE" \
               2>/dev/null
             then
-              echo "Archive found for @$USERNAME"
-              echo "Downloading only new videos..."
-
-              set +e
-
-              yt-dlp \
-                --ignore-errors \
-                --no-abort-on-error \
-                --continue \
-                --no-overwrites \
-                --download-archive "$ARCHIVE" \
-                --format "bv*+ba/b" \
-                --merge-output-format mp4 \
-                --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
-                "https://www.tiktok.com/@$USERNAME"
-
-              YTDLP_STATUS=$?
-
-              set -e
-
+              echo "Existing archive found."
             else
-              echo "No archive found for @$USERNAME"
-              echo "Creating baseline without downloading existing videos..."
-
+              echo "No archive yet. Creating one."
               touch "$ARCHIVE"
-
-              set +e
-
-              yt-dlp \
-                --ignore-errors \
-                --no-abort-on-error \
-                --skip-download \
-                --force-write-archive \
-                --download-archive "$ARCHIVE" \
-                "https://www.tiktok.com/@$USERNAME"
-
-              YTDLP_STATUS=$?
-
-              set -e
             fi
 
-            if [ "$YTDLP_STATUS" -ne 0 ]; then
-              echo "WARNING: @$USERNAME failed or could not be accessed."
-              echo "Continuing with the next username."
-            fi
+            echo "Checking TikTok..."
 
-            echo "Uploading any available files for @$USERNAME..."
+            # This is the same downloader that was working,
+            # with only a timestamp filter added.
+            yt-dlp \
+              --ignore-errors \
+              --no-abort-on-error \
+              --continue \
+              --no-overwrites \
+              --download-archive "$ARCHIVE" \
+              --match-filters "timestamp >= $START_EPOCH" \
+              --format "bv*+ba/b" \
+              --merge-output-format mp4 \
+              --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
+              "https://www.tiktok.com/@$USERNAME" \
+              || echo "WARNING: @$USERNAME could not be processed. Moving on."
+
+            echo "Uploading results for @$USERNAME..."
 
             rclone copy \
               "$FOLDER" \
               "gdrive:TikTok/$USERNAME" \
               --exclude "archive.txt" \
+              --exclude "start_epoch.txt" \
               || echo "Video upload failed for @$USERNAME"
 
-            if [ -s "$ARCHIVE" ]; then
-              rclone copyto \
-                "$ARCHIVE" \
-                "gdrive:TikTok/$USERNAME/archive.txt" \
-                || echo "Archive upload failed for @$USERNAME"
-            fi
+            # Always upload these, even if archive.txt is empty.
+            rclone copyto \
+              "$ARCHIVE" \
+              "gdrive:TikTok/$USERNAME/archive.txt" \
+              || echo "Archive upload failed for @$USERNAME"
+
+            rclone copyto \
+              "$START_FILE" \
+              "gdrive:TikTok/$USERNAME/start_epoch.txt" \
+              || echo "Start-time upload failed for @$USERNAME"
 
             echo "Finished @$USERNAME"
 
