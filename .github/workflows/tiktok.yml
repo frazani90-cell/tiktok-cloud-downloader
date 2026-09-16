@@ -42,11 +42,13 @@ jobs:
 
             if rclone copyto \
               "gdrive:TikTok/$USERNAME/archive.txt" \
-              "$ARCHIVE"
+              "$ARCHIVE" \
+              2>/dev/null
             then
-
               echo "Archive found for @$USERNAME"
               echo "Downloading only new videos..."
+
+              set +e
 
               yt-dlp \
                 --ignore-errors \
@@ -59,12 +61,17 @@ jobs:
                 --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
                 "https://www.tiktok.com/@$USERNAME"
 
-            else
+              YTDLP_STATUS=$?
 
+              set -e
+
+            else
               echo "No archive found for @$USERNAME"
               echo "Creating baseline without downloading existing videos..."
 
               touch "$ARCHIVE"
+
+              set +e
 
               yt-dlp \
                 --ignore-errors \
@@ -74,17 +81,31 @@ jobs:
                 --download-archive "$ARCHIVE" \
                 "https://www.tiktok.com/@$USERNAME"
 
+              YTDLP_STATUS=$?
+
+              set -e
             fi
 
-            echo "Uploading new files for @$USERNAME..."
+            if [ "$YTDLP_STATUS" -ne 0 ]; then
+              echo "WARNING: @$USERNAME failed or could not be accessed."
+              echo "Continuing with the next username."
+            fi
+
+            echo "Uploading any available files for @$USERNAME..."
 
             rclone copy \
               "$FOLDER" \
               "gdrive:TikTok/$USERNAME" \
-              --exclude "archive.txt"
+              --exclude "archive.txt" \
+              || echo "Video upload failed for @$USERNAME"
 
-            rclone copyto \
-              "$ARCHIVE" \
-              "gdrive:TikTok/$USERNAME/archive.txt"
+            if [ -s "$ARCHIVE" ]; then
+              rclone copyto \
+                "$ARCHIVE" \
+                "gdrive:TikTok/$USERNAME/archive.txt" \
+                || echo "Archive upload failed for @$USERNAME"
+            fi
+
+            echo "Finished @$USERNAME"
 
           done
