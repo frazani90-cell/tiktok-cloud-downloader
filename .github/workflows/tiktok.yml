@@ -23,7 +23,7 @@ jobs:
 
       - name: Download new TikTok videos
         run: |
-          USERNAME="_.meli._06"
+          USERNAME="sarahmelo_"
           mkdir -p "$HOME/tiktok/$USERNAME"
 
           rclone copyto \
@@ -47,7 +47,7 @@ jobs:
       - name: Upload to Google Drive
         if: always()
         run: |
-          USERNAME="_.meli._06"
+          USERNAME="sarahmelo_"
 
           rclone copy \
             "$HOME/tiktok/$USERNAME" \
