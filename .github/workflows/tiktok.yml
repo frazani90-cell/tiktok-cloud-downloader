@@ -2,6 +2,8 @@ name: TikTok Cloud Downloader
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 * * * *"
 
 jobs:
   download:
