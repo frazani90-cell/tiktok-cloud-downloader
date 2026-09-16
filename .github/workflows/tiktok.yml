@@ -21,39 +21,70 @@ jobs:
           mkdir -p ~/.config/rclone
           echo "$RCLONE_CONFIG_BASE64" | base64 --decode > ~/.config/rclone/rclone.conf
 
-      - name: Download new TikTok videos
+      - name: Check TikTok accounts
         run: |
-          USERNAME="sarahmeelo_"
-          mkdir -p "$HOME/tiktok/$USERNAME"
+          USERNAMES=(
+            "_.meli._06"
+            "sarahmeelo_"
+          )
 
-          rclone copyto \
-            "gdrive:TikTok/$USERNAME/archive.txt" \
-            "$HOME/tiktok/$USERNAME/archive.txt" \
-            2>/dev/null || true
+          for USERNAME in "${USERNAMES[@]}"; do
 
-          touch "$HOME/tiktok/$USERNAME/archive.txt"
+            echo ""
+            echo "=============================="
+            echo "Checking @$USERNAME"
+            echo "=============================="
 
-          yt-dlp \
-            --ignore-errors \
-            --no-abort-on-error \
-            --continue \
-            --no-overwrites \
-            --download-archive "$HOME/tiktok/$USERNAME/archive.txt" \
-            --format "bv*+ba/b" \
-            --merge-output-format mp4 \
-            --output "$HOME/tiktok/$USERNAME/%(upload_date)s_%(id)s.%(ext)s" \
-            "https://www.tiktok.com/@$USERNAME"
+            FOLDER="$HOME/tiktok/$USERNAME"
+            ARCHIVE="$FOLDER/archive.txt"
 
-      - name: Upload to Google Drive
-        if: always()
-        run: |
-          USERNAME="sarahmeelo_"
+            mkdir -p "$FOLDER"
 
-          rclone copy \
-            "$HOME/tiktok/$USERNAME" \
-            "gdrive:TikTok/$USERNAME" \
-            --exclude "archive.txt"
+            if rclone copyto \
+              "gdrive:TikTok/$USERNAME/archive.txt" \
+              "$ARCHIVE"
+            then
 
-          rclone copyto \
-            "$HOME/tiktok/$USERNAME/archive.txt" \
-            "gdrive:TikTok/$USERNAME/archive.txt"
+              echo "Archive found for @$USERNAME"
+              echo "Downloading only new videos..."
+
+              yt-dlp \
+                --ignore-errors \
+                --no-abort-on-error \
+                --continue \
+                --no-overwrites \
+                --download-archive "$ARCHIVE" \
+                --format "bv*+ba/b" \
+                --merge-output-format mp4 \
+                --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
+                "https://www.tiktok.com/@$USERNAME"
+
+            else
+
+              echo "No archive found for @$USERNAME"
+              echo "Creating baseline without downloading existing videos..."
+
+              touch "$ARCHIVE"
+
+              yt-dlp \
+                --ignore-errors \
+                --no-abort-on-error \
+                --skip-download \
+                --force-write-archive \
+                --download-archive "$ARCHIVE" \
+                "https://www.tiktok.com/@$USERNAME"
+
+            fi
+
+            echo "Uploading new files for @$USERNAME..."
+
+            rclone copy \
+              "$FOLDER" \
+              "gdrive:TikTok/$USERNAME" \
+              --exclude "archive.txt"
+
+            rclone copyto \
+              "$ARCHIVE" \
+              "gdrive:TikTok/$USERNAME/archive.txt"
+
+          done
