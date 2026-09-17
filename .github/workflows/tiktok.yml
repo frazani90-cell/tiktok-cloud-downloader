@@ -44,9 +44,6 @@ jobs:
 
             mkdir -p "$FOLDER"
 
-            # Load the monitoring start time.
-            # If this username has never been monitored before,
-            # monitoring starts NOW.
             if rclone copyto \
               "gdrive:TikTok/$USERNAME/start_epoch.txt" \
               "$START_FILE" \
@@ -66,7 +63,6 @@ jobs:
 
             echo "Monitoring posts from timestamp: $START_EPOCH"
 
-            # Load archive of videos already downloaded.
             if rclone copyto \
               "gdrive:TikTok/$USERNAME/archive.txt" \
               "$ARCHIVE" \
@@ -78,9 +74,6 @@ jobs:
               touch "$ARCHIVE"
             fi
 
-            # Use the normal profile URL for all accounts except
-            # sarahmeelo_, whose TikTok profile endpoint is currently
-            # failing JSON extraction.
             if [ "$USERNAME" = "sarahmeelo_" ]; then
               TIKTOK_SOURCE="tiktokuser:MS4wLjABAAAAWyawaDoAYYBtTOSpopcEEAaQhKQ16lpyAmWCtLhMxXfqXhFbFdNxj71s40tIUYaV"
             else
@@ -91,6 +84,7 @@ jobs:
             echo "Checking TikTok..."
 
             yt-dlp \
+              --impersonate chrome \
               --ignore-errors \
               --no-abort-on-error \
               --continue \
@@ -112,7 +106,6 @@ jobs:
               --exclude "start_epoch.txt" \
               || echo "Video upload failed for @$USERNAME"
 
-            # Save the archive and monitoring start time.
             rclone copyto \
               "$ARCHIVE" \
               "gdrive:TikTok/$USERNAME/archive.txt" \
