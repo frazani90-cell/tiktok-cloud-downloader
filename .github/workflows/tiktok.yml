@@ -3,7 +3,7 @@ name: TikTok Cloud Downloader
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "*/15 * * * *"
 
 jobs:
   download:
@@ -78,10 +78,18 @@ jobs:
               touch "$ARCHIVE"
             fi
 
+            # Use the normal profile URL for all accounts except
+            # sarahmeelo_, whose TikTok profile endpoint is currently
+            # failing JSON extraction.
+            if [ "$USERNAME" = "sarahmeelo_" ]; then
+              TIKTOK_SOURCE="tiktokuser:MS4wLjABAAAAWyawaDoAYYBtTOSpopcEEAaQhKQ16lpyAmWCtLhMxXfqXhFbFdNxj71s40tIUYaV"
+            else
+              TIKTOK_SOURCE="https://www.tiktok.com/@$USERNAME"
+            fi
+
+            echo "TikTok source: $TIKTOK_SOURCE"
             echo "Checking TikTok..."
 
-            # This is the same downloader that was working,
-            # with only a timestamp filter added.
             yt-dlp \
               --ignore-errors \
               --no-abort-on-error \
@@ -92,7 +100,7 @@ jobs:
               --format "bv*+ba/b" \
               --merge-output-format mp4 \
               --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
-              "https://www.tiktok.com/@$USERNAME" \
+              "$TIKTOK_SOURCE" \
               || echo "WARNING: @$USERNAME could not be processed. Moving on."
 
             echo "Uploading results for @$USERNAME..."
@@ -104,7 +112,7 @@ jobs:
               --exclude "start_epoch.txt" \
               || echo "Video upload failed for @$USERNAME"
 
-            # Always upload these, even if archive.txt is empty.
+            # Save the archive and monitoring start time.
             rclone copyto \
               "$ARCHIVE" \
               "gdrive:TikTok/$USERNAME/archive.txt" \
