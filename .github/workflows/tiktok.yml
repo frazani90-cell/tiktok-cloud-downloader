@@ -55,6 +55,8 @@ jobs:
             "likkunii"
             "_elisabedii"
             "ketaats"
+            "_alessandraliuofficial"
+            
           )
 
           BASE_FOLDER="$HOME/tiktok"
