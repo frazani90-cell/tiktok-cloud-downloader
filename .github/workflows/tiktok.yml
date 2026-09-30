@@ -57,22 +57,10 @@ jobs:
             "brillantinosa.reb"
             "maria.cleuza.pere30"
             "mancho_atskarunashvili"
+            "indieee_pretty"
+            "allysofia26"
+            
           )
-
-          # ==========================================
-          # AUTOMATICALLY READ LAST USERNAME
-          #
-          # Whenever you add a new profile, put it
-          # LAST in USERNAMES.
-          #
-          # No other part of the code needs changing.
-          # ==========================================
-
-          LAST_INDEX=$((${#USERNAMES[@]} - 1))
-          LAST_USERNAME="${USERNAMES[$LAST_INDEX]}"
-
-          echo ""
-          echo "Last username in list: @$LAST_USERNAME"
 
           BASE_FOLDER="$HOME/tiktok"
           mkdir -p "$BASE_FOLDER"
@@ -93,13 +81,11 @@ jobs:
             mkdir -p "$FOLDER"
 
             # ==========================================
-            # CHECK WHETHER PROFILE FOLDER ALREADY
-            # EXISTS IN GOOGLE DRIVE
+            # CHECK WHETHER THIS USER ALREADY HAS
+            # A GOOGLE DRIVE FOLDER
             #
-            # This happens BEFORE creating anything.
-            #
-            # Only the LAST username can qualify for
-            # historical Top 10.
+            # ANY username without a remote folder
+            # receives the historical Top 10.
             # ==========================================
 
             REMOTE_FOLDER_EXISTS=false
@@ -113,70 +99,90 @@ jobs:
               REMOTE_FOLDER_EXISTS=true
             fi
 
-            FIRST_RUN_LAST_USER=false
+            FIRST_RUN_USER=false
 
-            if [ "$USERNAME" = "$LAST_USERNAME" ] && \
-               [ "$REMOTE_FOLDER_EXISTS" = false ]; then
+            if [ "$REMOTE_FOLDER_EXISTS" = false ]; then
 
-              FIRST_RUN_LAST_USER=true
+              FIRST_RUN_USER=true
 
               echo ""
-              echo "NEW LAST USER DETECTED: @$USERNAME"
+              echo "NEW PROFILE DETECTED: @$USERNAME"
               echo "No Google Drive folder exists."
-              echo "Historical Top 10 will run."
+              echo "Historical Top 10 most-viewed videos will be downloaded."
 
-            elif [ "$USERNAME" = "$LAST_USERNAME" ]; then
+            else
 
               echo ""
-              echo "@$USERNAME is the last username."
-              echo "Google Drive folder already exists."
-              echo "Historical Top 10 will NOT run."
+              echo "Existing Google Drive folder found."
+              echo "Historical Top 10 will not run."
 
             fi
 
             # ==========================================
-            # RESTORE / CREATE START EPOCH
+            # RESTORE OR CREATE START EPOCH
+            #
+            # IMPORTANT:
+            #
+            # For a completely new user we create the
+            # start epoch LOCALLY first.
+            #
+            # We do NOT upload it immediately because
+            # doing that would create the remote folder
+            # before the first-run Top 10 finishes.
             # ==========================================
 
-            if rclone copyto \
-              "gdrive:TikTok/$USERNAME/start_epoch.txt" \
-              "$START_FILE" \
-              2>/dev/null
-            then
+            if [ "$REMOTE_FOLDER_EXISTS" = true ]; then
 
-              echo "Existing monitoring start time found."
+              if rclone copyto \
+                "gdrive:TikTok/$USERNAME/start_epoch.txt" \
+                "$START_FILE" \
+                2>/dev/null
+              then
+
+                echo "Existing monitoring start time found."
+
+              else
+
+                echo "No start time found. Creating one."
+                date +%s > "$START_FILE"
+
+              fi
 
             else
 
-              echo "First time monitoring @$USERNAME"
-
+              echo "Creating first monitoring start time."
               date +%s > "$START_FILE"
-
-              rclone copyto \
-                "$START_FILE" \
-                "gdrive:TikTok/$USERNAME/start_epoch.txt"
 
             fi
 
             START_EPOCH="$(tr -d '[:space:]' < "$START_FILE")"
 
-            echo "Monitoring normal posts after timestamp: $START_EPOCH"
+            echo "Monitoring normal new posts after timestamp: $START_EPOCH"
 
             # ==========================================
             # RESTORE VIDEO ARCHIVE
             # ==========================================
 
-            if rclone copyto \
-              "gdrive:TikTok/$USERNAME/archive.txt" \
-              "$VIDEO_ARCHIVE" \
-              2>/dev/null
-            then
+            if [ "$REMOTE_FOLDER_EXISTS" = true ]; then
 
-              echo "Existing video archive found."
+              if rclone copyto \
+                "gdrive:TikTok/$USERNAME/archive.txt" \
+                "$VIDEO_ARCHIVE" \
+                2>/dev/null
+              then
+
+                echo "Existing video archive found."
+
+              else
+
+                echo "No video archive found."
+                touch "$VIDEO_ARCHIVE"
+
+              fi
 
             else
 
-              echo "No video archive found."
+              echo "Creating new video archive."
               touch "$VIDEO_ARCHIVE"
 
             fi
@@ -185,17 +191,25 @@ jobs:
             # RESTORE PHOTO ARCHIVE
             # ==========================================
 
-            if rclone copyto \
-              "gdrive:TikTok/$USERNAME/photo_archive.sqlite3" \
-              "$PHOTO_ARCHIVE" \
-              2>/dev/null
-            then
+            if [ "$REMOTE_FOLDER_EXISTS" = true ]; then
 
-              echo "Existing photo archive found."
+              if rclone copyto \
+                "gdrive:TikTok/$USERNAME/photo_archive.sqlite3" \
+                "$PHOTO_ARCHIVE" \
+                2>/dev/null
+              then
+
+                echo "Existing photo archive found."
+
+              else
+
+                echo "No photo archive found yet."
+                rm -f "$PHOTO_ARCHIVE"
+
+              fi
 
             else
 
-              echo "No photo archive found yet."
               rm -f "$PHOTO_ARCHIVE"
 
             fi
@@ -219,11 +233,11 @@ jobs:
             # ==========================================
             # NORMAL NEW VIDEOS
             #
-            # ALL profiles use this.
+            # This applies to EVERY profile.
             #
-            # START_EPOCH applies.
+            # START_EPOCH is respected here.
             #
-            # Files stay directly inside profile folder:
+            # Flat structure:
             #
             # 20260930_POSTID.mp4
             # ==========================================
@@ -248,23 +262,21 @@ jobs:
             # ==========================================
             # HISTORICAL TOP 10 MOST-VIEWED VIDEOS
             #
-            # CONDITIONS:
+            # Runs for ANY USERNAME whose Google Drive
+            # folder did not exist when this run began.
             #
-            # 1. Must be LAST username in USERNAMES.
-            # 2. Its Google Drive folder did not exist
-            #    when this run started.
+            # Completely ignores START_EPOCH.
             #
-            # START_EPOCH IS COMPLETELY IGNORED.
-            #
-            # Only real VIDEO posts are considered.
-            # Slideshows are excluded.
+            # Only actual video posts are considered.
+            # Photo slideshows are excluded.
             # ==========================================
 
-            if [ "$FIRST_RUN_LAST_USER" = true ]; then
+            if [ "$FIRST_RUN_USER" = true ]; then
 
               echo ""
               echo "========================================"
-              echo "HISTORICAL TOP 10 FOR @$USERNAME"
+              echo "FIRST-RUN HISTORICAL TOP 10"
+              echo "@$USERNAME"
               echo "========================================"
 
               TOP10_META="/tmp/${USERNAME}_all_posts.jsonl"
@@ -274,11 +286,11 @@ jobs:
               rm -f "$TOP10_LIST"
 
               echo ""
-              echo "Scanning complete accessible profile..."
-              echo "No epoch restriction is being used."
+              echo "Scanning full accessible profile..."
+              echo "No epoch restriction."
 
               # ========================================
-              # SCAN ENTIRE PROFILE FOR METADATA
+              # GET METADATA FOR ENTIRE PROFILE
               # ========================================
 
               yt-dlp \
@@ -292,14 +304,11 @@ jobs:
                 || true
 
               # ========================================
-              # RANK REAL VIDEO POSTS BY VIEW COUNT
+              # SELECT 10 MOST-VIEWED REAL VIDEOS
               #
-              # Output:
+              # Result:
               #
-              # views<TAB>video_id
-              #
-              # Highest views first.
-              # Maximum 10.
+              # VIEWS<TAB>VIDEO_ID
               # ========================================
 
               if [ -s "$TOP10_META" ]; then
@@ -357,10 +366,10 @@ jobs:
               )"
 
               echo ""
-              echo "Top historical videos found: $TOP10_FOUND"
+              echo "Historical videos selected: $TOP10_FOUND"
 
               # ========================================
-              # DOWNLOAD THE SELECTED TOP 10
+              # DOWNLOAD TOP 10
               # ========================================
 
               if [ "$TOP10_FOUND" -gt 0 ]; then
@@ -380,7 +389,7 @@ jobs:
                   echo "Video ID: $VIDEO_ID"
                   echo "----------------------------------------"
 
-                  # Deliberately NO epoch filter here.
+                  # Deliberately no START_EPOCH filter.
 
                   yt-dlp \
                     --impersonate chrome \
@@ -400,7 +409,7 @@ jobs:
               else
 
                 echo ""
-                echo "WARNING: No historical video posts with view counts found."
+                echo "WARNING: No historical video posts with view counts were found."
 
               fi
 
@@ -415,8 +424,8 @@ jobs:
             # ==========================================
             # REMOVE AUDIO-ONLY FILES
             #
-            # TikTok slideshow posts can appear to
-            # yt-dlp as audio. We do not want those.
+            # TikTok slideshows may appear to yt-dlp
+            # as audio-only posts.
             # ==========================================
 
             find "$FOLDER" \
@@ -434,15 +443,15 @@ jobs:
             # ==========================================
             # PHOTO / SLIDESHOW POSTS
             #
-            # These follow START_EPOCH normally.
+            # START_EPOCH applies normally.
             #
-            # All images stay FLAT:
+            # Flat structure:
             #
             # 20260930_POSTID_01.jpg
             # 20260930_POSTID_02.jpg
             # 20260930_POSTID_03.jpg
             #
-            # No slideshow subfolders.
+            # No post folders.
             # No audio.
             # ==========================================
 
@@ -478,15 +487,7 @@ jobs:
               -delete
 
             # ==========================================
-            # COUNT NEW MEDIA FROM THIS RUN
-            #
-            # GitHub runner starts clean.
-            #
-            # Existing media is NOT downloaded back
-            # from Google Drive.
-            #
-            # Therefore local media here represents
-            # files downloaded during this run.
+            # COUNT NEW MEDIA DOWNLOADED THIS RUN
             # ==========================================
 
             NEW_MEDIA_COUNT="$(
@@ -516,13 +517,12 @@ jobs:
             echo "New media files found for @$USERNAME: $NEW_MEDIA_COUNT"
 
             # ==========================================
-            # UPLOAD MEDIA
+            # UPLOAD NEW MEDIA
             #
-            # Profile folder stays FLAT.
+            # Profile folder remains FLAT.
             #
-            # Modification time of username folder is
-            # refreshed only when actual new media
-            # exists.
+            # Folder modified time is refreshed only
+            # when actual new media exists.
             # ==========================================
 
             if [ "$NEW_MEDIA_COUNT" -gt 0 ]; then
@@ -553,7 +553,6 @@ jobs:
 
               echo ""
               echo "No new media for @$USERNAME"
-              echo "Google Drive profile folder timestamp left unchanged."
 
             fi
 
@@ -581,6 +580,9 @@ jobs:
 
             # ==========================================
             # SAVE START EPOCH
+            #
+            # For a new user this happens only AFTER
+            # the Top 10 stage.
             # ==========================================
 
             rclone copyto \
