@@ -43,6 +43,7 @@ jobs:
           echo "$RCLONE_CONFIG_BASE64" | base64 --decode > ~/.config/rclone/rclone.conf
 
       - name: Check TikTok accounts
+        shell: bash
         run: |
           USERNAMES=(
             "_.meli._06"
@@ -67,6 +68,9 @@ jobs:
 
             mkdir -p "$FOLDER"
 
+            # -----------------------------
+            # RESTORE MONITORING START TIME
+            # -----------------------------
             if rclone copyto \
               "gdrive:TikTok/$USERNAME/start_epoch.txt" \
               "$START_FILE" \
@@ -86,6 +90,9 @@ jobs:
 
             echo "Monitoring posts from timestamp: $START_EPOCH"
 
+            # -----------------------------
+            # RESTORE ARCHIVE
+            # -----------------------------
             if rclone copyto \
               "gdrive:TikTok/$USERNAME/archive.txt" \
               "$ARCHIVE" \
@@ -97,6 +104,9 @@ jobs:
               touch "$ARCHIVE"
             fi
 
+            # -----------------------------
+            # SELECT PROFILE SOURCE
+            # -----------------------------
             if [ "$USERNAME" = "sarahmeelo_" ]; then
               TIKTOK_SOURCE="tiktokuser:MS4wLjABAAAAWyawaDoAYYBtTOSpopcEEAaQhKQ16lpyAmWCtLhMxXfqXhFbFdNxj71s40tIUYaV"
             else
@@ -104,7 +114,11 @@ jobs:
             fi
 
             echo "TikTok source: $TIKTOK_SOURCE"
-            echo "Checking TikTok..."
+
+            # -----------------------------
+            # DOWNLOAD NORMAL POSTS
+            # -----------------------------
+            echo "Checking videos and photo posts..."
 
             yt-dlp \
               --impersonate chrome \
@@ -116,10 +130,32 @@ jobs:
               --match-filters "timestamp >= $START_EPOCH" \
               --format "bv*+ba/b" \
               --merge-output-format mp4 \
-              --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
+              --write-all-thumbnails \
+              --output "$FOLDER/%(upload_date)s_%(id)s/%(upload_date)s_%(id)s.%(ext)s" \
               "$TIKTOK_SOURCE" \
-              || echo "WARNING: @$USERNAME could not be processed. Moving on."
+              || echo "WARNING: @$USERNAME could not be fully processed. Moving on."
 
+            # -----------------------------
+            # REMOVE AUDIO-ONLY FILES
+            # -----------------------------
+            echo "Removing standalone audio files..."
+
+            find "$FOLDER" -type f \( \
+              -iname "*.mp3" -o \
+              -iname "*.m4a" -o \
+              -iname "*.aac" -o \
+              -iname "*.opus" -o \
+              -iname "*.ogg" \
+            \) -delete
+
+            # -----------------------------
+            # CLEAN EMPTY POST FOLDERS
+            # -----------------------------
+            find "$FOLDER" -type d -empty -delete 2>/dev/null || true
+
+            # -----------------------------
+            # UPLOAD TO GOOGLE DRIVE
+            # -----------------------------
             echo "Uploading results for @$USERNAME..."
 
             rclone copy \
@@ -127,13 +163,19 @@ jobs:
               "gdrive:TikTok/$USERNAME" \
               --exclude "archive.txt" \
               --exclude "start_epoch.txt" \
-              || echo "Video upload failed for @$USERNAME"
+              || echo "Upload failed for @$USERNAME"
 
+            # -----------------------------
+            # SAVE ARCHIVE
+            # -----------------------------
             rclone copyto \
               "$ARCHIVE" \
               "gdrive:TikTok/$USERNAME/archive.txt" \
               || echo "Archive upload failed for @$USERNAME"
 
+            # -----------------------------
+            # SAVE START TIME
+            # -----------------------------
             rclone copyto \
               "$START_FILE" \
               "gdrive:TikTok/$USERNAME/start_epoch.txt" \
