@@ -57,6 +57,9 @@ jobs:
             "ketaats"
           )
 
+          BASE_FOLDER="$HOME/tiktok"
+          mkdir -p "$BASE_FOLDER"
+
           for USERNAME in "${USERNAMES[@]}"; do
 
             echo ""
@@ -64,16 +67,13 @@ jobs:
             echo "Checking @$USERNAME"
             echo "========================================"
 
-            FOLDER="$HOME/tiktok/$USERNAME"
+            FOLDER="$BASE_FOLDER/$USERNAME"
 
             VIDEO_ARCHIVE="$FOLDER/archive.txt"
             PHOTO_ARCHIVE="$FOLDER/photo_archive.sqlite3"
             START_FILE="$FOLDER/start_epoch.txt"
 
-            PHOTO_STAGING="$FOLDER/.photo_staging"
-
             mkdir -p "$FOLDER"
-            mkdir -p "$PHOTO_STAGING"
 
             # ==========================================
             # RESTORE ORIGINAL MONITORING START TIME
@@ -100,7 +100,7 @@ jobs:
             echo "Monitoring posts after timestamp: $START_EPOCH"
 
             # ==========================================
-            # RESTORE VIDEO ARCHIVE
+            # RESTORE YT-DLP VIDEO ARCHIVE
             # ==========================================
 
             if rclone copyto \
@@ -115,7 +115,7 @@ jobs:
             fi
 
             # ==========================================
-            # RESTORE PHOTO ARCHIVE
+            # RESTORE GALLERY-DL PHOTO ARCHIVE
             # ==========================================
 
             if rclone copyto \
@@ -125,12 +125,12 @@ jobs:
             then
               echo "Existing photo archive found."
             else
-              echo "No photo archive yet."
+              echo "No photo archive found yet."
               rm -f "$PHOTO_ARCHIVE"
             fi
 
             # ==========================================
-            # YT-DLP PROFILE SOURCE
+            # SELECT YT-DLP SOURCE
             # ==========================================
 
             if [ "$USERNAME" = "sarahmeelo_" ]; then
@@ -142,7 +142,10 @@ jobs:
             PROFILE_URL="https://www.tiktok.com/@$USERNAME"
 
             # ==========================================
-            # NORMAL VIDEOS
+            # DOWNLOAD NORMAL VIDEOS
+            #
+            # Flat structure:
+            # 20260930_123456789.mp4
             # ==========================================
 
             echo ""
@@ -158,19 +161,15 @@ jobs:
               --match-filters "timestamp >= $START_EPOCH" \
               --format "bv*+ba/b" \
               --merge-output-format mp4 \
-              --output "$FOLDER/%(upload_date)s_%(id)s/%(upload_date)s_%(id)s.%(ext)s" \
+              --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
               "$TIKTOK_SOURCE" \
               || echo "WARNING: yt-dlp could not fully process @$USERNAME"
 
             # ==========================================
-            # REMOVE AUDIO-ONLY FILES CREATED BY
-            # TIKTOK PHOTO/SLIDESHOW POSTS
+            # REMOVE AUDIO FROM PHOTO/SLIDESHOW POSTS
             # ==========================================
 
-            echo ""
-            echo "Removing slideshow audio..."
-
-            find "$FOLDER" -type f \( \
+            find "$FOLDER" -maxdepth 1 -type f \( \
               -iname "*.mp3" -o \
               -iname "*.m4a" -o \
               -iname "*.aac" -o \
@@ -179,18 +178,17 @@ jobs:
             \) -delete
 
             # ==========================================
-            # PHOTO / SLIDESHOW POSTS
+            # DOWNLOAD PHOTO / SLIDESHOW POSTS
             #
-            # gallery-dl:
-            #   photos = yes
-            #   videos = no
-            #   audio  = no
+            # Photos only.
+            # Videos disabled.
+            # Audio disabled.
             #
-            # Each image is initially written as:
+            # Flat filenames:
             #
-            # POSTID_01.jpg
-            # POSTID_02.jpg
-            # POSTID_03.jpg
+            # 20260930_POSTID_01.jpg
+            # 20260930_POSTID_02.jpg
+            # 20260930_POSTID_03.jpg
             # ==========================================
 
             echo ""
@@ -199,8 +197,8 @@ jobs:
             gallery-dl \
               --date-after "$START_EPOCH" \
               --download-archive "$PHOTO_ARCHIVE" \
-              -D "$PHOTO_STAGING" \
-              -f "{id}_{num:>02}.{extension}" \
+              -D "$FOLDER" \
+              -f "{date:%Y%m%d}_{id}_{num:>02}.{extension}" \
               -o tiktok.photos=true \
               -o tiktok.videos=false \
               -o tiktok.audio=false \
@@ -209,79 +207,88 @@ jobs:
               || echo "WARNING: gallery-dl could not fully process @$USERNAME"
 
             # ==========================================
-            # ORGANISE SLIDESHOW IMAGES
-            #
-            # 123456789_01.jpg
-            # 123456789_02.jpg
-            #
-            # becomes:
-            #
-            # 123456789/
-            #   01.jpg
-            #   02.jpg
+            # REMOVE ANY AUDIO AGAIN JUST IN CASE
             # ==========================================
 
+            find "$FOLDER" -maxdepth 1 -type f \( \
+              -iname "*.mp3" -o \
+              -iname "*.m4a" -o \
+              -iname "*.aac" -o \
+              -iname "*.opus" -o \
+              -iname "*.ogg" \
+            \) -delete
+
+            # ==========================================
+            # CHECK WHETHER NEW MEDIA WAS DOWNLOADED
+            #
+            # The GitHub runner starts clean each run.
+            # Therefore media inside this folder represents
+            # media downloaded during THIS run.
+            # ==========================================
+
+            NEW_MEDIA_COUNT="$(
+              find "$FOLDER" -maxdepth 1 -type f \( \
+                -iname "*.mp4" -o \
+                -iname "*.mov" -o \
+                -iname "*.mkv" -o \
+                -iname "*.webm" -o \
+                -iname "*.jpg" -o \
+                -iname "*.jpeg" -o \
+                -iname "*.png" -o \
+                -iname "*.webp" -o \
+                -iname "*.avif" \
+              \) | wc -l
+            )"
+
+            NEW_MEDIA_COUNT="$(echo "$NEW_MEDIA_COUNT" | tr -d '[:space:]')"
+
             echo ""
-            echo "Organising slideshow images..."
+            echo "New media files found: $NEW_MEDIA_COUNT"
 
-            if [ -d "$PHOTO_STAGING" ]; then
+            # ==========================================
+            # UPLOAD MEDIA
+            #
+            # IMPORTANT:
+            #
+            # We copy from BASE_FOLDER -> gdrive:TikTok
+            # instead of FOLDER -> gdrive:TikTok/USERNAME.
+            #
+            # This makes USERNAME a subdirectory from
+            # rclone's perspective, allowing rclone to
+            # synchronize that folder's modification time.
+            # ==========================================
 
-              find "$PHOTO_STAGING" -maxdepth 1 -type f -print0 |
-              while IFS= read -r -d '' FILE; do
+            if [ "$NEW_MEDIA_COUNT" -gt 0 ]; then
 
-                BASENAME="$(basename "$FILE")"
+              echo ""
+              echo "New content found for @$USERNAME"
+              echo "Updating Google Drive folder modification time."
 
-                POST_ID="${BASENAME%%_*}"
-                IMAGE_NAME="${BASENAME#*_}"
+              # Set local username folder timestamp to now.
+              touch "$FOLDER"
 
-                if [[ "$POST_ID" =~ ^[0-9]+$ ]]; then
+              rclone copy \
+                "$BASE_FOLDER" \
+                "gdrive:TikTok" \
+                --filter "- /$USERNAME/archive.txt" \
+                --filter "- /$USERNAME/photo_archive.sqlite3" \
+                --filter "- /$USERNAME/photo_archive.sqlite3-wal" \
+                --filter "- /$USERNAME/photo_archive.sqlite3-shm" \
+                --filter "- /$USERNAME/start_epoch.txt" \
+                --filter "+ /$USERNAME/" \
+                --filter "+ /$USERNAME/**" \
+                --filter "- /**" \
+                || echo "Media upload failed for @$USERNAME"
 
-                  POST_FOLDER="$FOLDER/$POST_ID"
+            else
 
-                  mkdir -p "$POST_FOLDER"
-
-                  mv "$FILE" "$POST_FOLDER/$IMAGE_NAME"
-
-                  echo "Saved:"
-                  echo "$POST_FOLDER/$IMAGE_NAME"
-
-                else
-
-                  echo "WARNING: Could not identify post ID for:"
-                  echo "$BASENAME"
-
-                fi
-
-              done
+              echo "No new media for @$USERNAME"
+              echo "Google Drive folder timestamp will remain unchanged."
 
             fi
 
-            rm -rf "$PHOTO_STAGING"
-
             # ==========================================
-            # REMOVE EMPTY DIRECTORIES
-            # ==========================================
-
-            find "$FOLDER" -type d -empty -delete 2>/dev/null || true
-
-            # ==========================================
-            # UPLOAD MEDIA TO GOOGLE DRIVE
-            # ==========================================
-
-            echo ""
-            echo "Uploading media for @$USERNAME..."
-
-            rclone copy \
-              "$FOLDER" \
-              "gdrive:TikTok/$USERNAME" \
-              --exclude "archive.txt" \
-              --exclude "photo_archive.sqlite3" \
-              --exclude "start_epoch.txt" \
-              --exclude ".photo_staging/**" \
-              || echo "Media upload failed for @$USERNAME"
-
-            # ==========================================
-            # SAVE YT-DLP VIDEO ARCHIVE
+            # SAVE YT-DLP ARCHIVE
             # ==========================================
 
             rclone copyto \
