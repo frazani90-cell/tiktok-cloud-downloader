@@ -15,23 +15,20 @@ jobs:
           python -m pip install -U --pre "yt-dlp[default,curl-cffi]"
           python -m pip install -U gallery-dl
 
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg unzip
+
           mkdir -p "$HOME/.local/bin"
 
-          # rclone
+          # Install latest rclone
           curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip
           unzip -q /tmp/rclone.zip -d /tmp/rclone
           cp /tmp/rclone/rclone-*-linux-amd64/rclone "$HOME/.local/bin/rclone"
           chmod +x "$HOME/.local/bin/rclone"
 
-          # FFmpeg
-          curl -fsSL https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
-          tar -xf /tmp/ffmpeg.tar.xz -C /tmp
-          cp /tmp/ffmpeg-git-*-amd64-static/ffmpeg "$HOME/.local/bin/ffmpeg"
-          cp /tmp/ffmpeg-git-*-amd64-static/ffprobe "$HOME/.local/bin/ffprobe"
-          chmod +x "$HOME/.local/bin/ffmpeg" "$HOME/.local/bin/ffprobe"
-
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+          echo "Installed versions:"
           rclone version
           ffmpeg -version | head -1
           yt-dlp --version
@@ -55,8 +52,6 @@ jobs:
             "likkunii"
             "_elisabedii"
             "ketaats"
-            "_alessandraliuofficial"
-            
           )
 
           BASE_FOLDER="$HOME/tiktok"
@@ -78,7 +73,7 @@ jobs:
             mkdir -p "$FOLDER"
 
             # ==========================================
-            # RESTORE ORIGINAL MONITORING START TIME
+            # RESTORE MONITORING START TIME
             # ==========================================
 
             if rclone copyto \
@@ -102,7 +97,7 @@ jobs:
             echo "Monitoring posts after timestamp: $START_EPOCH"
 
             # ==========================================
-            # RESTORE YT-DLP VIDEO ARCHIVE
+            # RESTORE VIDEO ARCHIVE
             # ==========================================
 
             if rclone copyto \
@@ -117,7 +112,7 @@ jobs:
             fi
 
             # ==========================================
-            # RESTORE GALLERY-DL PHOTO ARCHIVE
+            # RESTORE PHOTO ARCHIVE
             # ==========================================
 
             if rclone copyto \
@@ -132,7 +127,7 @@ jobs:
             fi
 
             # ==========================================
-            # SELECT YT-DLP SOURCE
+            # SELECT TIKTOK SOURCE
             # ==========================================
 
             if [ "$USERNAME" = "sarahmeelo_" ]; then
@@ -144,10 +139,10 @@ jobs:
             PROFILE_URL="https://www.tiktok.com/@$USERNAME"
 
             # ==========================================
-            # DOWNLOAD NORMAL VIDEOS
+            # NORMAL VIDEO POSTS
             #
-            # Flat structure:
-            # 20260930_123456789.mp4
+            # Example:
+            # 20260930_1234567890123456789.mp4
             # ==========================================
 
             echo ""
@@ -168,7 +163,7 @@ jobs:
               || echo "WARNING: yt-dlp could not fully process @$USERNAME"
 
             # ==========================================
-            # REMOVE AUDIO FROM PHOTO/SLIDESHOW POSTS
+            # REMOVE AUDIO CREATED FOR PHOTO POSTS
             # ==========================================
 
             find "$FOLDER" -maxdepth 1 -type f \( \
@@ -180,17 +175,16 @@ jobs:
             \) -delete
 
             # ==========================================
-            # DOWNLOAD PHOTO / SLIDESHOW POSTS
+            # PHOTO / SLIDESHOW POSTS
             #
-            # Photos only.
-            # Videos disabled.
-            # Audio disabled.
-            #
-            # Flat filenames:
+            # Example:
             #
             # 20260930_POSTID_01.jpg
             # 20260930_POSTID_02.jpg
             # 20260930_POSTID_03.jpg
+            #
+            # No subfolders.
+            # No audio.
             # ==========================================
 
             echo ""
@@ -209,7 +203,7 @@ jobs:
               || echo "WARNING: gallery-dl could not fully process @$USERNAME"
 
             # ==========================================
-            # REMOVE ANY AUDIO AGAIN JUST IN CASE
+            # REMOVE ANY AUDIO AGAIN
             # ==========================================
 
             find "$FOLDER" -maxdepth 1 -type f \( \
@@ -221,52 +215,57 @@ jobs:
             \) -delete
 
             # ==========================================
-            # CHECK WHETHER NEW MEDIA WAS DOWNLOADED
+            # COUNT NEW MEDIA
             #
-            # The GitHub runner starts clean each run.
-            # Therefore media inside this folder represents
-            # media downloaded during THIS run.
+            # GitHub runner is fresh every run.
+            # Existing media is NOT downloaded from Drive.
+            #
+            # Therefore media present here represents
+            # newly downloaded media from this run.
             # ==========================================
 
             NEW_MEDIA_COUNT="$(
-              find "$FOLDER" -maxdepth 1 -type f \( \
-                -iname "*.mp4" -o \
-                -iname "*.mov" -o \
-                -iname "*.mkv" -o \
-                -iname "*.webm" -o \
-                -iname "*.jpg" -o \
-                -iname "*.jpeg" -o \
-                -iname "*.png" -o \
-                -iname "*.webp" -o \
-                -iname "*.avif" \
-              \) | wc -l
+              find "$FOLDER" \
+                -maxdepth 1 \
+                -type f \
+                \( \
+                  -iname "*.mp4" -o \
+                  -iname "*.mov" -o \
+                  -iname "*.mkv" -o \
+                  -iname "*.webm" -o \
+                  -iname "*.jpg" -o \
+                  -iname "*.jpeg" -o \
+                  -iname "*.png" -o \
+                  -iname "*.webp" -o \
+                  -iname "*.avif" \
+                \) \
+                | wc -l
             )"
 
             NEW_MEDIA_COUNT="$(echo "$NEW_MEDIA_COUNT" | tr -d '[:space:]')"
 
             echo ""
-            echo "New media files found: $NEW_MEDIA_COUNT"
+            echo "New media files found for @$USERNAME: $NEW_MEDIA_COUNT"
 
             # ==========================================
-            # UPLOAD MEDIA
-            #
-            # IMPORTANT:
-            #
-            # We copy from BASE_FOLDER -> gdrive:TikTok
-            # instead of FOLDER -> gdrive:TikTok/USERNAME.
-            #
-            # This makes USERNAME a subdirectory from
-            # rclone's perspective, allowing rclone to
-            # synchronize that folder's modification time.
+            # UPLOAD NEW MEDIA
             # ==========================================
 
             if [ "$NEW_MEDIA_COUNT" -gt 0 ]; then
 
               echo ""
               echo "New content found for @$USERNAME"
-              echo "Updating Google Drive folder modification time."
+              echo "Uploading media..."
 
-              # Set local username folder timestamp to now.
+              # Set the local profile folder modification
+              # time to now.
+              #
+              # Because we copy BASE_FOLDER rather than
+              # the contents of FOLDER directly, the
+              # username directory is a subdirectory and
+              # rclone can synchronize its directory
+              # modification time to Google Drive.
+
               touch "$FOLDER"
 
               rclone copy \
@@ -282,15 +281,19 @@ jobs:
                 --filter "- /**" \
                 || echo "Media upload failed for @$USERNAME"
 
+              echo "Media uploaded."
+              echo "Google Drive folder modified time updated."
+
             else
 
+              echo ""
               echo "No new media for @$USERNAME"
-              echo "Google Drive folder timestamp will remain unchanged."
+              echo "Google Drive folder modified time left unchanged."
 
             fi
 
             # ==========================================
-            # SAVE YT-DLP ARCHIVE
+            # SAVE VIDEO ARCHIVE
             # ==========================================
 
             rclone copyto \
@@ -299,7 +302,7 @@ jobs:
               || echo "Video archive upload failed for @$USERNAME"
 
             # ==========================================
-            # SAVE GALLERY-DL PHOTO ARCHIVE
+            # SAVE PHOTO ARCHIVE
             # ==========================================
 
             if [ -f "$PHOTO_ARCHIVE" ]; then
