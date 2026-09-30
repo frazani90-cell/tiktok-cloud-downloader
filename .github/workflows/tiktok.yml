@@ -1,3 +1,4 @@
+```yaml
 name: TikTok Cloud Downloader
 
 on:
@@ -13,8 +14,27 @@ jobs:
       - name: Install tools
         run: |
           python -m pip install -U --pre "yt-dlp[default,curl-cffi]"
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg rclone
+
+          mkdir -p "$HOME/.local/bin"
+
+          # rclone
+          curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip
+          unzip -q /tmp/rclone.zip -d /tmp/rclone
+          cp /tmp/rclone/rclone-*-linux-amd64/rclone "$HOME/.local/bin/rclone"
+          chmod +x "$HOME/.local/bin/rclone"
+
+          # FFmpeg
+          curl -fsSL https://johnvansickle.com/ffmpeg/builds/ffmpeg-git-amd64-static.tar.xz -o /tmp/ffmpeg.tar.xz
+          tar -xf /tmp/ffmpeg.tar.xz -C /tmp
+          cp /tmp/ffmpeg-git-*-amd64-static/ffmpeg "$HOME/.local/bin/ffmpeg"
+          cp /tmp/ffmpeg-git-*-amd64-static/ffprobe "$HOME/.local/bin/ffprobe"
+          chmod +x "$HOME/.local/bin/ffmpeg" "$HOME/.local/bin/ffprobe"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          rclone version
+          ffmpeg -version | head -1
+          yt-dlp --version
 
       - name: Restore rclone configuration
         env:
@@ -123,3 +143,4 @@ jobs:
             echo "Finished @$USERNAME"
 
           done
+```
