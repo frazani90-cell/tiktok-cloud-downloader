@@ -1,4 +1,3 @@
-```yaml
 name: TikTok Cloud Downloader
 
 on:
@@ -143,4 +142,3 @@ jobs:
             echo "Finished @$USERNAME"
 
           done
-```
