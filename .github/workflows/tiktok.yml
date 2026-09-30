@@ -59,14 +59,20 @@ jobs:
             "mancho_atskarunashvili"
           )
 
-          # Last 4 usernames receive an additional historical
-          # Top 10 most-viewed video scan.
-          TOP10_USERS=(
-            "_alessandraliuofficial"
-            "brillantinosa.reb"
-            "maria.cleuza.pere30"
-            "mancho_atskarunashvili"
-          )
+          # ==========================================
+          # AUTOMATICALLY READ LAST USERNAME
+          #
+          # Whenever you add a new profile, put it
+          # LAST in USERNAMES.
+          #
+          # No other part of the code needs changing.
+          # ==========================================
+
+          LAST_INDEX=$((${#USERNAMES[@]} - 1))
+          LAST_USERNAME="${USERNAMES[$LAST_INDEX]}"
+
+          echo ""
+          echo "Last username in list: @$LAST_USERNAME"
 
           BASE_FOLDER="$HOME/tiktok"
           mkdir -p "$BASE_FOLDER"
@@ -83,29 +89,53 @@ jobs:
             VIDEO_ARCHIVE="$FOLDER/archive.txt"
             PHOTO_ARCHIVE="$FOLDER/photo_archive.sqlite3"
             START_FILE="$FOLDER/start_epoch.txt"
-            TOP10_DONE="$FOLDER/top10_done.txt"
 
             mkdir -p "$FOLDER"
 
             # ==========================================
-            # IS THIS A TOP-10 PROFILE?
+            # CHECK WHETHER PROFILE FOLDER ALREADY
+            # EXISTS IN GOOGLE DRIVE
+            #
+            # This happens BEFORE creating anything.
+            #
+            # Only the LAST username can qualify for
+            # historical Top 10.
             # ==========================================
 
-            IS_TOP10_USER=false
+            REMOTE_FOLDER_EXISTS=false
 
-            for TOP_USER in "${TOP10_USERS[@]}"; do
-              if [ "$USERNAME" = "$TOP_USER" ]; then
-                IS_TOP10_USER=true
-                break
-              fi
-            done
+            if rclone lsf \
+              "gdrive:TikTok" \
+              --dirs-only \
+              2>/dev/null \
+              | grep -Fxq "$USERNAME/"
+            then
+              REMOTE_FOLDER_EXISTS=true
+            fi
 
-            if [ "$IS_TOP10_USER" = true ]; then
-              echo "Historical Top 10 enabled for @$USERNAME"
+            FIRST_RUN_LAST_USER=false
+
+            if [ "$USERNAME" = "$LAST_USERNAME" ] && \
+               [ "$REMOTE_FOLDER_EXISTS" = false ]; then
+
+              FIRST_RUN_LAST_USER=true
+
+              echo ""
+              echo "NEW LAST USER DETECTED: @$USERNAME"
+              echo "No Google Drive folder exists."
+              echo "Historical Top 10 will run."
+
+            elif [ "$USERNAME" = "$LAST_USERNAME" ]; then
+
+              echo ""
+              echo "@$USERNAME is the last username."
+              echo "Google Drive folder already exists."
+              echo "Historical Top 10 will NOT run."
+
             fi
 
             # ==========================================
-            # RESTORE START TIME
+            # RESTORE / CREATE START EPOCH
             # ==========================================
 
             if rclone copyto \
@@ -113,8 +143,11 @@ jobs:
               "$START_FILE" \
               2>/dev/null
             then
+
               echo "Existing monitoring start time found."
+
             else
+
               echo "First time monitoring @$USERNAME"
 
               date +%s > "$START_FILE"
@@ -122,11 +155,12 @@ jobs:
               rclone copyto \
                 "$START_FILE" \
                 "gdrive:TikTok/$USERNAME/start_epoch.txt"
+
             fi
 
             START_EPOCH="$(tr -d '[:space:]' < "$START_FILE")"
 
-            echo "Monitoring normal new posts after timestamp: $START_EPOCH"
+            echo "Monitoring normal posts after timestamp: $START_EPOCH"
 
             # ==========================================
             # RESTORE VIDEO ARCHIVE
@@ -137,10 +171,14 @@ jobs:
               "$VIDEO_ARCHIVE" \
               2>/dev/null
             then
+
               echo "Existing video archive found."
+
             else
+
               echo "No video archive found."
               touch "$VIDEO_ARCHIVE"
+
             fi
 
             # ==========================================
@@ -152,28 +190,13 @@ jobs:
               "$PHOTO_ARCHIVE" \
               2>/dev/null
             then
+
               echo "Existing photo archive found."
+
             else
+
               echo "No photo archive found yet."
               rm -f "$PHOTO_ARCHIVE"
-            fi
-
-            # ==========================================
-            # RESTORE TOP-10 COMPLETION MARKER
-            # ==========================================
-
-            if [ "$IS_TOP10_USER" = true ]; then
-
-              if rclone copyto \
-                "gdrive:TikTok/$USERNAME/top10_done.txt" \
-                "$TOP10_DONE" \
-                2>/dev/null
-              then
-                echo "Historical Top 10 already completed."
-              else
-                echo "Historical Top 10 not completed yet."
-                rm -f "$TOP10_DONE"
-              fi
 
             fi
 
@@ -182,19 +205,25 @@ jobs:
             # ==========================================
 
             if [ "$USERNAME" = "sarahmeelo_" ]; then
+
               TIKTOK_SOURCE="tiktokuser:MS4wLjABAAAAWyawaDoAYYBtTOSpopcEEAaQhKQ16lpyAmWCtLhMxXfqXhFbFdNxj71s40tIUYaV"
+
             else
+
               TIKTOK_SOURCE="https://www.tiktok.com/@$USERNAME"
+
             fi
 
             PROFILE_URL="https://www.tiktok.com/@$USERNAME"
 
             # ==========================================
-            # NORMAL NEW VIDEO POSTS
+            # NORMAL NEW VIDEOS
             #
-            # These respect START_EPOCH.
+            # ALL profiles use this.
             #
-            # Files remain flat:
+            # START_EPOCH applies.
+            #
+            # Files stay directly inside profile folder:
             #
             # 20260930_POSTID.mp4
             # ==========================================
@@ -217,25 +246,25 @@ jobs:
               || echo "WARNING: yt-dlp could not fully process @$USERNAME"
 
             # ==========================================
-            # HISTORICAL TOP 10 BY VIEWS
+            # HISTORICAL TOP 10 MOST-VIEWED VIDEOS
             #
-            # LAST FOUR USERS ONLY.
+            # CONDITIONS:
             #
-            # START_EPOCH IS NOT USED HERE.
+            # 1. Must be LAST username in USERNAMES.
+            # 2. Its Google Drive folder did not exist
+            #    when this run started.
             #
-            # Entire accessible profile is inspected.
-            # Actual video posts are ranked by views.
+            # START_EPOCH IS COMPLETELY IGNORED.
             #
-            # Top 10 are downloaded.
-            #
-            # Runs once unless top10_done.txt is deleted.
+            # Only real VIDEO posts are considered.
+            # Slideshows are excluded.
             # ==========================================
 
-            if [ "$IS_TOP10_USER" = true ] && [ ! -f "$TOP10_DONE" ]; then
+            if [ "$FIRST_RUN_LAST_USER" = true ]; then
 
               echo ""
               echo "========================================"
-              echo "Historical Top 10 scan for @$USERNAME"
+              echo "HISTORICAL TOP 10 FOR @$USERNAME"
               echo "========================================"
 
               TOP10_META="/tmp/${USERNAME}_all_posts.jsonl"
@@ -244,7 +273,13 @@ jobs:
               rm -f "$TOP10_META"
               rm -f "$TOP10_LIST"
 
-              echo "Scanning full accessible profile..."
+              echo ""
+              echo "Scanning complete accessible profile..."
+              echo "No epoch restriction is being used."
+
+              # ========================================
+              # SCAN ENTIRE PROFILE FOR METADATA
+              # ========================================
 
               yt-dlp \
                 --impersonate chrome \
@@ -256,21 +291,24 @@ jobs:
                 > "$TOP10_META" \
                 || true
 
-              # Build:
+              # ========================================
+              # RANK REAL VIDEO POSTS BY VIEW COUNT
               #
-              # views<TAB>url
+              # Output:
               #
-              # Slideshows/audio-only entries are excluded.
+              # views<TAB>video_id
+              #
+              # Highest views first.
+              # Maximum 10.
+              # ========================================
 
               if [ -s "$TOP10_META" ]; then
 
                 jq -r -s '
                   map(
-                    . as $item
-                    | (.webpage_url // .original_url // .url) as $post_url
-                    | select(.id != null)
-                    | select($post_url != null)
+                    select(.id != null)
                     | select(.view_count != null)
+
                     | select(
                         any(
                           .formats[]?;
@@ -280,21 +318,30 @@ jobs:
                           )
                         )
                       )
+
                     | {
                         id: .id,
                         views: (.view_count // 0),
-                        timestamp: (.timestamp // 0),
-                        url: $post_url
+                        timestamp: (.timestamp // 0)
                       }
                   )
+
                   | unique_by(.id)
-                  | sort_by(.views, .timestamp)
+
+                  | sort_by(
+                      .views,
+                      .timestamp
+                    )
+
                   | reverse
+
                   | .[:10][]
+
                   | [
                       (.views | tostring),
-                      .url
+                      .id
                     ]
+
                   | @tsv
                 ' "$TOP10_META" > "$TOP10_LIST"
 
@@ -304,122 +351,99 @@ jobs:
 
               fi
 
-              TOP10_FOUND="$(wc -l < "$TOP10_LIST" | tr -d '[:space:]')"
+              TOP10_FOUND="$(
+                wc -l < "$TOP10_LIST" |
+                tr -d '[:space:]'
+              )"
 
               echo ""
-              echo "Historical videos selected: $TOP10_FOUND"
+              echo "Top historical videos found: $TOP10_FOUND"
 
-              ALL_TOP10_OK=1
+              # ========================================
+              # DOWNLOAD THE SELECTED TOP 10
+              # ========================================
 
               if [ "$TOP10_FOUND" -gt 0 ]; then
 
                 POSITION=0
 
-                while IFS=$'\t' read -r VIEWS TOP_URL; do
+                while IFS=$'\t' read -r VIEWS VIDEO_ID; do
 
                   POSITION=$((POSITION + 1))
+
+                  TOP_URL="https://www.tiktok.com/@$USERNAME/video/$VIDEO_ID"
 
                   echo ""
                   echo "----------------------------------------"
                   echo "Top video #$POSITION"
                   echo "Views: $VIEWS"
-                  echo "URL: $TOP_URL"
+                  echo "Video ID: $VIDEO_ID"
                   echo "----------------------------------------"
 
-                  # No epoch filter here.
-                  #
-                  # download-archive is still used so an
-                  # already-downloaded video is not duplicated.
+                  # Deliberately NO epoch filter here.
 
-                  if yt-dlp \
+                  yt-dlp \
                     --impersonate chrome \
+                    --ignore-errors \
+                    --no-abort-on-error \
                     --continue \
                     --no-overwrites \
                     --download-archive "$VIDEO_ARCHIVE" \
                     --format "bv*[vcodec!=none]+ba/b[vcodec!=none]" \
                     --merge-output-format mp4 \
                     --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
-                    "$TOP_URL"
-                  then
-
-                    echo "Top video #$POSITION processed."
-
-                  else
-
-                    echo "WARNING: Top video #$POSITION failed."
-                    ALL_TOP10_OK=0
-
-                  fi
+                    "$TOP_URL" \
+                    || echo "WARNING: Top video #$POSITION could not be downloaded."
 
                 done < "$TOP10_LIST"
 
               else
 
+                echo ""
                 echo "WARNING: No historical video posts with view counts found."
-                ALL_TOP10_OK=0
-
-              fi
-
-              # Only create completion marker after
-              # successful processing.
-
-              if [ "$ALL_TOP10_OK" -eq 1 ] && [ "$TOP10_FOUND" -gt 0 ]; then
-
-                {
-                  echo "username=$USERNAME"
-                  echo "completed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-                  echo "videos_selected=$TOP10_FOUND"
-                } > "$TOP10_DONE"
-
-                echo ""
-                echo "Historical Top 10 completed for @$USERNAME"
-
-              else
-
-                echo ""
-                echo "Historical Top 10 incomplete."
-                echo "It will retry next run."
 
               fi
 
               rm -f "$TOP10_META"
               rm -f "$TOP10_LIST"
 
-            elif [ "$IS_TOP10_USER" = true ]; then
-
               echo ""
-              echo "Historical Top 10 already completed for @$USERNAME"
+              echo "Historical Top 10 stage finished."
 
             fi
 
             # ==========================================
             # REMOVE AUDIO-ONLY FILES
             #
-            # This removes soundtrack files generated
-            # from TikTok slideshow/photo posts.
+            # TikTok slideshow posts can appear to
+            # yt-dlp as audio. We do not want those.
             # ==========================================
 
-            find "$FOLDER" -maxdepth 1 -type f \( \
-              -iname "*.mp3" -o \
-              -iname "*.m4a" -o \
-              -iname "*.aac" -o \
-              -iname "*.opus" -o \
-              -iname "*.ogg" \
-            \) -delete
+            find "$FOLDER" \
+              -maxdepth 1 \
+              -type f \
+              \( \
+                -iname "*.mp3" -o \
+                -iname "*.m4a" -o \
+                -iname "*.aac" -o \
+                -iname "*.opus" -o \
+                -iname "*.ogg" \
+              \) \
+              -delete
 
             # ==========================================
             # PHOTO / SLIDESHOW POSTS
             #
-            # Normal epoch rules still apply.
+            # These follow START_EPOCH normally.
             #
-            # Flat structure:
+            # All images stay FLAT:
             #
             # 20260930_POSTID_01.jpg
             # 20260930_POSTID_02.jpg
             # 20260930_POSTID_03.jpg
             #
-            # No slideshow folders.
-            # No slideshow audio.
+            # No slideshow subfolders.
+            # No audio.
             # ==========================================
 
             echo ""
@@ -438,25 +462,31 @@ jobs:
               || echo "WARNING: gallery-dl could not fully process @$USERNAME"
 
             # ==========================================
-            # REMOVE ANY AUDIO AGAIN
+            # REMOVE AUDIO AGAIN AS SAFETY
             # ==========================================
 
-            find "$FOLDER" -maxdepth 1 -type f \( \
-              -iname "*.mp3" -o \
-              -iname "*.m4a" -o \
-              -iname "*.aac" -o \
-              -iname "*.opus" -o \
-              -iname "*.ogg" \
-            \) -delete
+            find "$FOLDER" \
+              -maxdepth 1 \
+              -type f \
+              \( \
+                -iname "*.mp3" -o \
+                -iname "*.m4a" -o \
+                -iname "*.aac" -o \
+                -iname "*.opus" -o \
+                -iname "*.ogg" \
+              \) \
+              -delete
 
             # ==========================================
-            # COUNT NEW MEDIA DOWNLOADED THIS RUN
+            # COUNT NEW MEDIA FROM THIS RUN
             #
             # GitHub runner starts clean.
             #
-            # We restore tracking files only, not old
-            # media, so media present locally represents
-            # files obtained during this run.
+            # Existing media is NOT downloaded back
+            # from Google Drive.
+            #
+            # Therefore local media here represents
+            # files downloaded during this run.
             # ==========================================
 
             NEW_MEDIA_COUNT="$(
@@ -477,21 +507,22 @@ jobs:
                 | wc -l
             )"
 
-            NEW_MEDIA_COUNT="$(echo "$NEW_MEDIA_COUNT" | tr -d '[:space:]')"
+            NEW_MEDIA_COUNT="$(
+              echo "$NEW_MEDIA_COUNT" |
+              tr -d '[:space:]'
+            )"
 
             echo ""
             echo "New media files found for @$USERNAME: $NEW_MEDIA_COUNT"
 
             # ==========================================
-            # UPLOAD NEW MEDIA
+            # UPLOAD MEDIA
             #
-            # Everything remains directly inside the
-            # username folder.
+            # Profile folder stays FLAT.
             #
-            # No per-post directories.
-            #
-            # Username folder modification time is
-            # touched only when media exists.
+            # Modification time of username folder is
+            # refreshed only when actual new media
+            # exists.
             # ==========================================
 
             if [ "$NEW_MEDIA_COUNT" -gt 0 ]; then
@@ -510,20 +541,19 @@ jobs:
                 --filter "- /$USERNAME/photo_archive.sqlite3-wal" \
                 --filter "- /$USERNAME/photo_archive.sqlite3-shm" \
                 --filter "- /$USERNAME/start_epoch.txt" \
-                --filter "- /$USERNAME/top10_done.txt" \
                 --filter "+ /$USERNAME/" \
                 --filter "+ /$USERNAME/**" \
                 --filter "- /**" \
                 || echo "Media upload failed for @$USERNAME"
 
               echo "Media uploaded."
-              echo "Profile folder timestamp refreshed."
+              echo "Google Drive profile folder timestamp refreshed."
 
             else
 
               echo ""
               echo "No new media for @$USERNAME"
-              echo "Profile folder timestamp left unchanged."
+              echo "Google Drive profile folder timestamp left unchanged."
 
             fi
 
@@ -557,19 +587,6 @@ jobs:
               "$START_FILE" \
               "gdrive:TikTok/$USERNAME/start_epoch.txt" \
               || echo "Start-time upload failed for @$USERNAME"
-
-            # ==========================================
-            # SAVE TOP-10 COMPLETION MARKER
-            # ==========================================
-
-            if [ "$IS_TOP10_USER" = true ] && [ -f "$TOP10_DONE" ]; then
-
-              rclone copyto \
-                "$TOP10_DONE" \
-                "gdrive:TikTok/$USERNAME/top10_done.txt" \
-                || echo "Top-10 marker upload failed for @$USERNAME"
-
-            fi
 
             echo ""
             echo "Finished @$USERNAME"
