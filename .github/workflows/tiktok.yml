@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: "*/10 * * * *"
 
+concurrency:
+  group: tiktok-cloud-downloader
+  cancel-in-progress: false
+
 jobs:
   download:
     runs-on: ubuntu-latest
@@ -20,7 +24,6 @@ jobs:
 
           mkdir -p "$HOME/.local/bin"
 
-          # Install latest rclone
           curl -fsSL https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip
           unzip -q /tmp/rclone.zip -d /tmp/rclone
           cp /tmp/rclone/rclone-*-linux-amd64/rclone "$HOME/.local/bin/rclone"
@@ -70,8 +73,19 @@ jobs:
             "salmalaoukili601"
           )
 
+          RECENT_LIMIT=30
+
           BASE_FOLDER="$HOME/tiktok"
           mkdir -p "$BASE_FOLDER"
+
+          # Get the Drive folder list once instead of making
+          # the same request separately for every username.
+          REMOTE_DIRS="$(
+            rclone lsf \
+              "gdrive:TikTok" \
+              --dirs-only \
+              2>/dev/null || true
+          )"
 
           for USERNAME in "${USERNAMES[@]}"; do
 
@@ -81,7 +95,6 @@ jobs:
             echo "========================================"
 
             FOLDER="$BASE_FOLDER/$USERNAME"
-
             VIDEO_ARCHIVE="$FOLDER/archive.txt"
             PHOTO_ARCHIVE="$FOLDER/photo_archive.sqlite3"
             START_FILE="$FOLDER/start_epoch.txt"
@@ -89,21 +102,12 @@ jobs:
             mkdir -p "$FOLDER"
 
             # ==========================================
-            # CHECK WHETHER THIS USER ALREADY HAS
-            # A GOOGLE DRIVE FOLDER
-            #
-            # ANY username without a remote folder
-            # receives the historical Top 10.
+            # CHECK WHETHER REMOTE PROFILE EXISTS
             # ==========================================
 
             REMOTE_FOLDER_EXISTS=false
 
-            if rclone lsf \
-              "gdrive:TikTok" \
-              --dirs-only \
-              2>/dev/null \
-              | grep -Fxq "$USERNAME/"
-            then
+            if printf '%s\n' "$REMOTE_DIRS" | grep -Fxq "$USERNAME/"; then
               REMOTE_FOLDER_EXISTS=true
             fi
 
@@ -115,28 +119,16 @@ jobs:
 
               echo ""
               echo "NEW PROFILE DETECTED: @$USERNAME"
-              echo "No Google Drive folder exists."
-              echo "Historical Top 10 most-viewed videos will be downloaded."
+              echo "Historical Top 10 will run."
 
             else
 
-              echo ""
               echo "Existing Google Drive folder found."
-              echo "Historical Top 10 will not run."
 
             fi
 
             # ==========================================
-            # RESTORE OR CREATE START EPOCH
-            #
-            # IMPORTANT:
-            #
-            # For a completely new user we create the
-            # start epoch LOCALLY first.
-            #
-            # We do NOT upload it immediately because
-            # doing that would create the remote folder
-            # before the first-run Top 10 finishes.
+            # RESTORE / CREATE START EPOCH
             # ==========================================
 
             if [ "$REMOTE_FOLDER_EXISTS" = true ]; then
@@ -146,14 +138,10 @@ jobs:
                 "$START_FILE" \
                 2>/dev/null
               then
-
                 echo "Existing monitoring start time found."
-
               else
-
                 echo "No start time found. Creating one."
                 date +%s > "$START_FILE"
-
               fi
 
             else
@@ -165,7 +153,7 @@ jobs:
 
             START_EPOCH="$(tr -d '[:space:]' < "$START_FILE")"
 
-            echo "Monitoring normal new posts after timestamp: $START_EPOCH"
+            echo "Monitoring posts after timestamp: $START_EPOCH"
 
             # ==========================================
             # RESTORE VIDEO ARCHIVE
@@ -178,19 +166,14 @@ jobs:
                 "$VIDEO_ARCHIVE" \
                 2>/dev/null
               then
-
                 echo "Existing video archive found."
-
               else
-
                 echo "No video archive found."
                 touch "$VIDEO_ARCHIVE"
-
               fi
 
             else
 
-              echo "Creating new video archive."
               touch "$VIDEO_ARCHIVE"
 
             fi
@@ -206,14 +189,9 @@ jobs:
                 "$PHOTO_ARCHIVE" \
                 2>/dev/null
               then
-
                 echo "Existing photo archive found."
-
               else
-
-                echo "No photo archive found yet."
                 rm -f "$PHOTO_ARCHIVE"
-
               fi
 
             else
@@ -223,7 +201,7 @@ jobs:
             fi
 
             # ==========================================
-            # SELECT TIKTOK SOURCE
+            # SELECT SOURCE
             # ==========================================
 
             if [ "$USERNAME" = "sarahmeelo_" ]; then
@@ -239,52 +217,20 @@ jobs:
             PROFILE_URL="https://www.tiktok.com/@$USERNAME"
 
             # ==========================================
-            # NORMAL NEW VIDEOS
+            # FIRST-RUN HISTORICAL TOP 10
             #
-            # This applies to EVERY profile.
+            # ONLY users without a Drive folder.
             #
-            # START_EPOCH is respected here.
-            #
-            # Flat structure:
-            #
-            # 20260930_POSTID.mp4
-            # ==========================================
-
-            echo ""
-            echo "Checking normal new videos..."
-
-            yt-dlp \
-              --impersonate chrome \
-              --ignore-errors \
-              --no-abort-on-error \
-              --continue \
-              --no-overwrites \
-              --download-archive "$VIDEO_ARCHIVE" \
-              --match-filters "timestamp >= $START_EPOCH" \
-              --format "bv*+ba/b" \
-              --merge-output-format mp4 \
-              --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
-              "$TIKTOK_SOURCE" \
-              || echo "WARNING: yt-dlp could not fully process @$USERNAME"
-
-            # ==========================================
-            # HISTORICAL TOP 10 MOST-VIEWED VIDEOS
-            #
-            # Runs for ANY USERNAME whose Google Drive
-            # folder did not exist when this run began.
-            #
-            # Completely ignores START_EPOCH.
-            #
-            # Only actual video posts are considered.
-            # Photo slideshows are excluded.
+            # This remains a COMPLETE profile scan
+            # because otherwise we cannot know the
+            # actual 10 most-viewed videos.
             # ==========================================
 
             if [ "$FIRST_RUN_USER" = true ]; then
 
               echo ""
               echo "========================================"
-              echo "FIRST-RUN HISTORICAL TOP 10"
-              echo "@$USERNAME"
+              echo "HISTORICAL TOP 10 FOR @$USERNAME"
               echo "========================================"
 
               TOP10_META="/tmp/${USERNAME}_all_posts.jsonl"
@@ -293,13 +239,7 @@ jobs:
               rm -f "$TOP10_META"
               rm -f "$TOP10_LIST"
 
-              echo ""
               echo "Scanning full accessible profile..."
-              echo "No epoch restriction."
-
-              # ========================================
-              # GET METADATA FOR ENTIRE PROFILE
-              # ========================================
 
               yt-dlp \
                 --impersonate chrome \
@@ -309,15 +249,7 @@ jobs:
                 --dump-json \
                 "$TIKTOK_SOURCE" \
                 > "$TOP10_META" \
-                || true
-
-              # ========================================
-              # SELECT 10 MOST-VIEWED REAL VIDEOS
-              #
-              # Result:
-              #
-              # VIEWS<TAB>VIDEO_ID
-              # ========================================
+                || echo "::warning::Historical metadata scan had errors for @$USERNAME"
 
               if [ -s "$TOP10_META" ]; then
 
@@ -325,7 +257,6 @@ jobs:
                   map(
                     select(.id != null)
                     | select(.view_count != null)
-
                     | select(
                         any(
                           .formats[]?;
@@ -335,30 +266,20 @@ jobs:
                           )
                         )
                       )
-
                     | {
                         id: .id,
                         views: (.view_count // 0),
                         timestamp: (.timestamp // 0)
                       }
                   )
-
                   | unique_by(.id)
-
-                  | sort_by(
-                      .views,
-                      .timestamp
-                    )
-
+                  | sort_by(.views, .timestamp)
                   | reverse
-
                   | .[:10][]
-
                   | [
                       (.views | tostring),
                       .id
                     ]
-
                   | @tsv
                 ' "$TOP10_META" > "$TOP10_LIST"
 
@@ -373,12 +294,7 @@ jobs:
                 tr -d '[:space:]'
               )"
 
-              echo ""
               echo "Historical videos selected: $TOP10_FOUND"
-
-              # ========================================
-              # DOWNLOAD TOP 10
-              # ========================================
 
               if [ "$TOP10_FOUND" -gt 0 ]; then
 
@@ -391,49 +307,68 @@ jobs:
                   TOP_URL="https://www.tiktok.com/@$USERNAME/video/$VIDEO_ID"
 
                   echo ""
-                  echo "----------------------------------------"
                   echo "Top video #$POSITION"
                   echo "Views: $VIEWS"
                   echo "Video ID: $VIDEO_ID"
-                  echo "----------------------------------------"
 
-                  # Deliberately no START_EPOCH filter.
-
-                  yt-dlp \
+                  if ! yt-dlp \
                     --impersonate chrome \
-                    --ignore-errors \
-                    --no-abort-on-error \
                     --continue \
                     --no-overwrites \
                     --download-archive "$VIDEO_ARCHIVE" \
                     --format "bv*[vcodec!=none]+ba/b[vcodec!=none]" \
                     --merge-output-format mp4 \
                     --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
-                    "$TOP_URL" \
-                    || echo "WARNING: Top video #$POSITION could not be downloaded."
+                    "$TOP_URL"
+                  then
+                    echo "::warning::Top video #$POSITION failed for @$USERNAME"
+                  fi
 
                 done < "$TOP10_LIST"
 
               else
 
-                echo ""
-                echo "WARNING: No historical video posts with view counts were found."
+                echo "::warning::No historical videos with view counts found for @$USERNAME"
 
               fi
 
               rm -f "$TOP10_META"
               rm -f "$TOP10_LIST"
 
-              echo ""
-              echo "Historical Top 10 stage finished."
+            fi
+
+            # ==========================================
+            # NORMAL RECURRING VIDEO CHECK
+            #
+            # ONLY inspect latest 30 posts.
+            #
+            # Best available real video quality.
+            # ==========================================
+
+            echo ""
+            echo "Checking latest $RECENT_LIMIT video posts..."
+
+            if ! yt-dlp \
+              --playlist-end "$RECENT_LIMIT" \
+              --impersonate chrome \
+              --ignore-errors \
+              --no-abort-on-error \
+              --continue \
+              --no-overwrites \
+              --download-archive "$VIDEO_ARCHIVE" \
+              --match-filters "timestamp >= $START_EPOCH" \
+              --format "bv*[vcodec!=none]+ba/b[vcodec!=none]" \
+              --merge-output-format mp4 \
+              --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
+              "$TIKTOK_SOURCE"
+            then
+
+              echo "::warning::yt-dlp recurring check had errors for @$USERNAME"
 
             fi
 
             # ==========================================
             # REMOVE AUDIO-ONLY FILES
-            #
-            # TikTok slideshows may appear to yt-dlp
-            # as audio-only posts.
             # ==========================================
 
             find "$FOLDER" \
@@ -449,24 +384,16 @@ jobs:
               -delete
 
             # ==========================================
-            # PHOTO / SLIDESHOW POSTS
+            # PHOTO / SLIDESHOW CHECK
             #
-            # START_EPOCH applies normally.
-            #
-            # Flat structure:
-            #
-            # 20260930_POSTID_01.jpg
-            # 20260930_POSTID_02.jpg
-            # 20260930_POSTID_03.jpg
-            #
-            # No post folders.
-            # No audio.
+            # ONLY latest 30 posts.
             # ==========================================
 
             echo ""
-            echo "Checking photo/slideshow posts..."
+            echo "Checking latest $RECENT_LIMIT photo/slideshow posts..."
 
-            gallery-dl \
+            if ! gallery-dl \
+              --post-range "1-$RECENT_LIMIT" \
               --date-after "$START_EPOCH" \
               --download-archive "$PHOTO_ARCHIVE" \
               -D "$FOLDER" \
@@ -475,11 +402,15 @@ jobs:
               -o tiktok.videos=false \
               -o tiktok.audio=false \
               -o tiktok.covers=false \
-              "$PROFILE_URL" \
-              || echo "WARNING: gallery-dl could not fully process @$USERNAME"
+              "$PROFILE_URL"
+            then
+
+              echo "::warning::gallery-dl check had errors for @$USERNAME"
+
+            fi
 
             # ==========================================
-            # REMOVE AUDIO AGAIN AS SAFETY
+            # REMOVE AUDIO AGAIN
             # ==========================================
 
             find "$FOLDER" \
@@ -495,7 +426,7 @@ jobs:
               -delete
 
             # ==========================================
-            # COUNT NEW MEDIA DOWNLOADED THIS RUN
+            # COUNT MEDIA DOWNLOADED THIS RUN
             # ==========================================
 
             NEW_MEDIA_COUNT="$(
@@ -522,26 +453,19 @@ jobs:
             )"
 
             echo ""
-            echo "New media files found for @$USERNAME: $NEW_MEDIA_COUNT"
+            echo "New media files for @$USERNAME: $NEW_MEDIA_COUNT"
 
             # ==========================================
             # UPLOAD NEW MEDIA
-            #
-            # Profile folder remains FLAT.
-            #
-            # Folder modified time is refreshed only
-            # when actual new media exists.
             # ==========================================
 
             if [ "$NEW_MEDIA_COUNT" -gt 0 ]; then
 
-              echo ""
-              echo "New content found for @$USERNAME"
-              echo "Uploading media..."
+              echo "Uploading new media for @$USERNAME..."
 
               touch "$FOLDER"
 
-              rclone copy \
+              if ! rclone copy \
                 "$BASE_FOLDER" \
                 "gdrive:TikTok" \
                 --filter "- /$USERNAME/archive.txt" \
@@ -551,52 +475,49 @@ jobs:
                 --filter "- /$USERNAME/start_epoch.txt" \
                 --filter "+ /$USERNAME/" \
                 --filter "+ /$USERNAME/**" \
-                --filter "- /**" \
-                || echo "Media upload failed for @$USERNAME"
+                --filter "- /**"
+              then
 
-              echo "Media uploaded."
-              echo "Google Drive profile folder timestamp refreshed."
+                echo "::warning::Media upload failed for @$USERNAME"
+
+              fi
+
+              echo "Media upload stage finished."
 
             else
 
-              echo ""
               echo "No new media for @$USERNAME"
 
             fi
 
             # ==========================================
-            # SAVE VIDEO ARCHIVE
+            # SAVE STATE FILES
             # ==========================================
 
-            rclone copyto \
+            if ! rclone copyto \
               "$VIDEO_ARCHIVE" \
-              "gdrive:TikTok/$USERNAME/archive.txt" \
-              || echo "Video archive upload failed for @$USERNAME"
-
-            # ==========================================
-            # SAVE PHOTO ARCHIVE
-            # ==========================================
+              "gdrive:TikTok/$USERNAME/archive.txt"
+            then
+              echo "::warning::Video archive upload failed for @$USERNAME"
+            fi
 
             if [ -f "$PHOTO_ARCHIVE" ]; then
 
-              rclone copyto \
+              if ! rclone copyto \
                 "$PHOTO_ARCHIVE" \
-                "gdrive:TikTok/$USERNAME/photo_archive.sqlite3" \
-                || echo "Photo archive upload failed for @$USERNAME"
+                "gdrive:TikTok/$USERNAME/photo_archive.sqlite3"
+              then
+                echo "::warning::Photo archive upload failed for @$USERNAME"
+              fi
 
             fi
 
-            # ==========================================
-            # SAVE START EPOCH
-            #
-            # For a new user this happens only AFTER
-            # the Top 10 stage.
-            # ==========================================
-
-            rclone copyto \
+            if ! rclone copyto \
               "$START_FILE" \
-              "gdrive:TikTok/$USERNAME/start_epoch.txt" \
-              || echo "Start-time upload failed for @$USERNAME"
+              "gdrive:TikTok/$USERNAME/start_epoch.txt"
+            then
+              echo "::warning::Start epoch upload failed for @$USERNAME"
+            fi
 
             echo ""
             echo "Finished @$USERNAME"
