@@ -45,8 +45,6 @@ jobs:
           - "salmalaoukili601"
           - "_sarahmeeloo"
           - "saplovesdogs"
-
-          - "giovannizani"
     env:
       USERNAME: ${{ matrix.username }}
       RECENT_LIMIT: "15"
