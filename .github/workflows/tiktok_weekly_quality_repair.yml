@@ -1,0 +1,151 @@
+name: TikTok Weekly Quality Repair
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch:
+    inputs:
+      usernames:
+        description: "Usernames, comma/space separated; blank = all configured accounts"
+        type: string
+        required: false
+        default: ""
+      video_ids:
+        description: "Optional video IDs; supply exactly one username when using this field"
+        type: string
+        required: false
+        default: ""
+      limit:
+        description: "Videos per account (0 = all, within the time budget)"
+        type: string
+        required: true
+        default: "5"
+      watermark_policy:
+        description: "Flagged/unknown watermark: separate (safe), allow replacement, or skip"
+        type: choice
+        options:
+          - separate
+          - allow
+          - skip
+        default: separate
+      bitrate_policy:
+        description: "Same-resolution bitrate/FPS gains: separate (safe) or allow replacement"
+        type: choice
+        options:
+          - separate
+          - allow
+        default: separate
+  schedule:
+    - cron: "0 4 * * 1"
+
+concurrency:
+  group: tiktok-weekly-quality-repair
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      usernames: ${{ steps.accounts.outputs.usernames }}
+    steps:
+      - name: Select accounts
+        id: accounts
+        env:
+          REQUESTED: ${{ inputs.usernames }}
+          VIDEO_IDS: ${{ inputs.video_ids }}
+          REPAIR_LIMIT: ${{ inputs.limit || '5' }}
+          DEFAULT_ACCOUNTS: '["_.meli._06", "sarahmeelo_", "beylinyuc", "zaraaa_.333", "likkunii", "_elisabedii", "ketaats", "_alessandraliuofficial", "brillantinosa.reb", "maria.cleuza.pere30", "mancho_atskarunashvili", "indieee_pretty", "allysofia26", "hindsidki2", "vanessa.silva32754", "anne.oconnor7", "secret_acc_67_0", "dneskaceerozbijem", "mariacarmella93614", "yourfavblonds2", "lorene_715", "salmalaoukili601", "_sarahmeeloo", "saplovesdogs", "milevi5", "a_668ufc", "sara.nigito"]'
+        run: |
+          python - <<'PYCODE'
+          import json, os, re
+          requested = os.environ["REQUESTED"].strip()
+          names = ([x.lstrip("@") for x in re.split(r"[,\s]+", requested) if x]
+                   if requested else json.loads(os.environ["DEFAULT_ACCOUNTS"]))
+          names = list(dict.fromkeys(names))
+          if not names or any(not re.fullmatch(r"[A-Za-z0-9_.]{1,64}", n)
+                              or n in {".", ".."} for n in names):
+              raise SystemExit("Invalid username list")
+          ids = [x for x in re.split(r"[,\s]+", os.environ["VIDEO_IDS"].strip()) if x]
+          if ids and (len(names) != 1 or any(not re.fullmatch(r"\d{17,21}", x) for x in ids)):
+              raise SystemExit("Video IDs require exactly one username and numeric IDs")
+          limit = int(os.environ["REPAIR_LIMIT"])
+          if limit < 0:
+              raise SystemExit("Limit must be zero or positive")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write("usernames=" + json.dumps(names) + "\n")
+          PYCODE
+
+  repair:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: tiktok-account-${{ matrix.username }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        username: ${{ fromJSON(needs.prepare.outputs.usernames) }}
+    env:
+      USERNAME: ${{ matrix.username }}
+      REPAIR_BATCH: ${{ inputs.limit || '5' }}
+      VIDEO_IDS: ${{ inputs.video_ids }}
+      WATERMARK_POLICY: ${{ inputs.watermark_policy || 'separate' }}
+      BITRATE_POLICY: ${{ inputs.bitrate_policy || 'separate' }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify quality engine is installed
+        run: python tiktok_quality_engine.py --help
+      - name: Install quality tools
+        shell: bash
+        run: |
+          python -m pip install -U --pre "yt-dlp[default,curl-cffi]" gallery-dl
+          MISSING=()
+          command -v ffprobe >/dev/null 2>&1 || MISSING+=(ffmpeg)
+          command -v unzip >/dev/null 2>&1 || MISSING+=(unzip)
+          if [ "${#MISSING[@]}" -gt 0 ]; then
+            sudo apt-get update
+            sudo apt-get install -y "${MISSING[@]}"
+          fi
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL --retry 3 https://downloads.rclone.org/rclone-current-linux-amd64.zip -o /tmp/rclone.zip
+          rm -rf /tmp/rclone
+          unzip -q /tmp/rclone.zip -d /tmp/rclone
+          cp /tmp/rclone/rclone-*-linux-amd64/rclone "$HOME/.local/bin/rclone"
+          chmod +x "$HOME/.local/bin/rclone"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.local/bin:$PATH"
+          yt-dlp --version
+          gallery-dl --version
+          rclone version
+      - name: Restore rclone config
+        env:
+          RCLONE_CONFIG_BASE64: ${{ secrets.RCLONE_CONFIG_BASE64 }}
+        shell: bash
+        run: |
+          test -n "$RCLONE_CONFIG_BASE64" || { echo "::error::Missing RCLONE_CONFIG_BASE64 secret"; exit 1; }
+          umask 077
+          mkdir -p ~/.config/rclone
+          printf '%s' "$RCLONE_CONFIG_BASE64" | base64 --decode > ~/.config/rclone/rclone.conf
+      - name: Check and upgrade existing videos
+        shell: bash
+        run: |
+          python tiktok_quality_engine.py repair \
+            --username "$USERNAME" \
+            --limit "$REPAIR_BATCH" \
+            --video-ids "$VIDEO_IDS" \
+            --watermark-policy "$WATERMARK_POLICY" \
+            --bitrate-policy "$BITRATE_POLICY" \
+            --time-budget 2400 \
+            --report "quality_reports/$USERNAME-repair.json"
+      - name: Save quality reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tiktok-quality-repair-${{ matrix.username }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: quality_reports/
+          if-no-files-found: ignore
+          retention-days: 14
