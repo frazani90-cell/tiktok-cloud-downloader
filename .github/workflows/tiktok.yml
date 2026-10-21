@@ -55,6 +55,8 @@ jobs:
       RECENT_LIMIT: "15"
 
     steps:
+      - uses: actions/checkout@v4
+
 
       # ==================================================
       # INSTALL TOOLS
@@ -490,6 +492,21 @@ jobs:
 
             echo "::warning::Video check timed out/failed for @$USERNAME (code $EXIT_CODE)"
 
+          fi
+
+          # ==================================================
+          # SECOND SOURCE + REAL MEDIA QUALITY CHECK
+          # Uses quality engine committed at repository root.
+          # Gallery-dl can expose a different TikTok media URL.
+          # ==================================================
+
+          if [ -f tiktok_quality_engine.py ]; then
+            python tiktok_quality_engine.py new \
+              --username "$USERNAME" \
+              --folder "$FOLDER" \
+              || echo "::warning::Quality comparison unavailable for @$USERNAME"
+          else
+            echo "::warning::Missing tiktok_quality_engine.py in repository root"
           fi
 
           # ==================================================
