@@ -1,0 +1,694 @@
+name: TikTok Cloud Downloader
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+concurrency:
+  group: tiktok-cloud-downloader
+  cancel-in-progress: false
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+
+    timeout-minutes: 30
+
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+
+      matrix:
+        username:
+          - "_.meli._06"
+          - "sarahmeelo_"
+          - "beylinyuc"
+          - "zaraaa_.333"
+          - "likkunii"
+          - "_elisabedii"
+          - "ketaats"
+          - "_alessandraliuofficial"
+          - "brillantinosa.reb"
+          - "maria.cleuza.pere30"
+          - "mancho_atskarunashvili"
+          - "indieee_pretty"
+          - "allysofia26"
+          - "hindsidki2"
+          - "vanessa.silva32754"
+          - "anne.oconnor7"
+          - "secret_acc_67_0"
+          - "dneskaceerozbijem"
+          - "mariacarmella93614"
+          - "yourfavblonds2"
+          - "lorene_715"
+          - "salmalaoukili601"
+          - "_sarahmeeloo"
+          - "saplovesdogs"
+          - "milevi5"
+          - "a_668ufc"
+          - "sara.nigito"
+        
+          
+    env:
+      USERNAME: ${{ matrix.username }}
+      RECENT_LIMIT: "15"
+
+    steps:
+      - uses: actions/checkout@v4
+
+
+      # ==================================================
+      # INSTALL TOOLS
+      # ==================================================
+
+      - name: Install tools
+        shell: bash
+        run: |
+          python -m pip install -U --pre "yt-dlp[default,curl-cffi]"
+          python -m pip install -U gallery-dl
+
+          # Install system tools only if missing.
+          MISSING_PACKAGES=()
+
+          command -v ffmpeg >/dev/null 2>&1 || MISSING_PACKAGES+=("ffmpeg")
+          command -v unzip  >/dev/null 2>&1 || MISSING_PACKAGES+=("unzip")
+          command -v jq     >/dev/null 2>&1 || MISSING_PACKAGES+=("jq")
+
+          if [ "${#MISSING_PACKAGES[@]}" -gt 0 ]; then
+            sudo apt-get update
+            sudo apt-get install -y "${MISSING_PACKAGES[@]}"
+          fi
+
+          mkdir -p "$HOME/.local/bin"
+
+          curl -fsSL \
+            https://downloads.rclone.org/rclone-current-linux-amd64.zip \
+            -o /tmp/rclone.zip
+
+          rm -rf /tmp/rclone
+
+          unzip -q \
+            /tmp/rclone.zip \
+            -d /tmp/rclone
+
+          cp \
+            /tmp/rclone/rclone-*-linux-amd64/rclone \
+            "$HOME/.local/bin/rclone"
+
+          chmod +x "$HOME/.local/bin/rclone"
+
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+          echo "Installed versions:"
+          rclone version
+          ffmpeg -version | head -1
+          yt-dlp --version
+          gallery-dl --version
+          jq --version
+
+      # ==================================================
+      # RESTORE RCLONE CONFIG
+      # ==================================================
+
+      - name: Restore rclone configuration
+        env:
+          RCLONE_CONFIG_BASE64: ${{ secrets.RCLONE_CONFIG_BASE64 }}
+        shell: bash
+        run: |
+          mkdir -p ~/.config/rclone
+
+          echo "$RCLONE_CONFIG_BASE64" \
+            | base64 --decode \
+            > ~/.config/rclone/rclone.conf
+
+      # ==================================================
+      # PROCESS ONE PROFILE
+      # ==================================================
+
+      - name: Process TikTok profile
+        shell: bash
+        run: |
+
+          echo ""
+          echo "=========================================="
+          echo "Processing @$USERNAME"
+          echo "=========================================="
+
+          BASE_FOLDER="$HOME/tiktok"
+          FOLDER="$BASE_FOLDER/$USERNAME"
+
+          VIDEO_ARCHIVE="$FOLDER/archive.txt"
+          PHOTO_ARCHIVE="$FOLDER/photo_archive.sqlite3"
+          START_FILE="$FOLDER/start_epoch.txt"
+
+          mkdir -p "$FOLDER"
+
+          # ==================================================
+          # CHECK IF USER ALREADY EXISTS IN GOOGLE DRIVE
+          #
+          # Any username without a Drive folder gets the
+          # historical Top 10 on its first run.
+          # ==================================================
+
+          REMOTE_FOLDER_EXISTS=false
+
+          if rclone lsf \
+            "gdrive:TikTok" \
+            --dirs-only \
+            --max-depth 1 \
+            2>/dev/null \
+            | grep -Fxq "$USERNAME/"
+          then
+            REMOTE_FOLDER_EXISTS=true
+          fi
+
+          FIRST_RUN_USER=false
+
+          if [ "$REMOTE_FOLDER_EXISTS" = false ]; then
+
+            FIRST_RUN_USER=true
+
+            echo ""
+            echo "NEW PROFILE: @$USERNAME"
+            echo "Historical Top 10 will run."
+
+          else
+
+            echo ""
+            echo "Existing Google Drive profile found."
+
+          fi
+
+          # ==================================================
+          # RESTORE / CREATE START EPOCH
+          # ==================================================
+
+          if [ "$REMOTE_FOLDER_EXISTS" = true ]; then
+
+            if rclone copyto \
+              "gdrive:TikTok/$USERNAME/start_epoch.txt" \
+              "$START_FILE" \
+              2>/dev/null
+            then
+
+              echo "Existing start epoch restored."
+
+            else
+
+              echo "No start epoch found. Creating one."
+
+              date +%s > "$START_FILE"
+
+            fi
+
+          else
+
+            echo "Creating first start epoch."
+
+            date +%s > "$START_FILE"
+
+          fi
+
+          START_EPOCH="$(
+            tr -d '[:space:]' < "$START_FILE"
+          )"
+
+          echo "START_EPOCH=$START_EPOCH"
+
+          # ==================================================
+          # RESTORE VIDEO ARCHIVE
+          # ==================================================
+
+          if [ "$REMOTE_FOLDER_EXISTS" = true ]; then
+
+            if rclone copyto \
+              "gdrive:TikTok/$USERNAME/archive.txt" \
+              "$VIDEO_ARCHIVE" \
+              2>/dev/null
+            then
+
+              echo "Video archive restored."
+
+            else
+
+              echo "No video archive found."
+
+              touch "$VIDEO_ARCHIVE"
+
+            fi
+
+          else
+
+            touch "$VIDEO_ARCHIVE"
+
+          fi
+
+          # ==================================================
+          # RESTORE PHOTO ARCHIVE
+          # ==================================================
+
+          if [ "$REMOTE_FOLDER_EXISTS" = true ]; then
+
+            if rclone copyto \
+              "gdrive:TikTok/$USERNAME/photo_archive.sqlite3" \
+              "$PHOTO_ARCHIVE" \
+              2>/dev/null
+            then
+
+              echo "Photo archive restored."
+
+            else
+
+              rm -f "$PHOTO_ARCHIVE"
+
+            fi
+
+          else
+
+            rm -f "$PHOTO_ARCHIVE"
+
+          fi
+
+          # ==================================================
+          # SELECT TIKTOK SOURCE
+          # ==================================================
+
+          if [ "$USERNAME" = "sarahmeelo_" ]; then
+
+            TIKTOK_SOURCE="tiktokuser:MS4wLjABAAAAWyawaDoAYYBtTOSpopcEEAaQhKQ16lpyAmWCtLhMxXfqXhFbFdNxj71s40tIUYaV"
+
+          else
+
+            TIKTOK_SOURCE="https://www.tiktok.com/@$USERNAME"
+
+          fi
+
+          PROFILE_URL="https://www.tiktok.com/@$USERNAME"
+
+          # ==================================================
+          # FIRST RUN: HISTORICAL TOP 10 BY VIEWS
+          #
+          # Only runs if this profile did NOT already have
+          # a Google Drive folder.
+          #
+          # This is intentionally the ONLY full-profile scan.
+          # ==================================================
+
+          if [ "$FIRST_RUN_USER" = true ]; then
+
+            echo ""
+            echo "=========================================="
+            echo "HISTORICAL TOP 10: @$USERNAME"
+            echo "=========================================="
+
+            TOP10_META="/tmp/${USERNAME}_all_posts.jsonl"
+            TOP10_LIST="/tmp/${USERNAME}_top10.tsv"
+
+            rm -f "$TOP10_META"
+            rm -f "$TOP10_LIST"
+
+            echo "Scanning full profile for view counts..."
+
+            # Maximum 15 minutes for full historical scan.
+            if timeout 900 yt-dlp \
+              --impersonate chrome \
+              --socket-timeout 20 \
+              --retries 2 \
+              --ignore-errors \
+              --no-abort-on-error \
+              --skip-download \
+              --dump-json \
+              "$TIKTOK_SOURCE" \
+              > "$TOP10_META"
+            then
+
+              echo "Historical metadata scan finished."
+
+            else
+
+              EXIT_CODE=$?
+
+              echo "::warning::Historical scan stopped/failed for @$USERNAME (code $EXIT_CODE)"
+
+            fi
+
+            # ==================================================
+            # SELECT 10 MOST VIEWED REAL VIDEOS
+            # ==================================================
+
+            if [ -s "$TOP10_META" ]; then
+
+              jq -r -s '
+                map(
+                  select(.id != null)
+                  | select(.view_count != null)
+
+                  | select(
+                      any(
+                        .formats[]?;
+                        (
+                          .vcodec != null
+                          and .vcodec != "none"
+                        )
+                      )
+                    )
+
+                  | {
+                      id: .id,
+                      views: (.view_count // 0),
+                      timestamp: (.timestamp // 0)
+                    }
+                )
+
+                | unique_by(.id)
+
+                | sort_by(
+                    .views,
+                    .timestamp
+                  )
+
+                | reverse
+
+                | .[:10][]
+
+                | [
+                    (.views | tostring),
+                    .id
+                  ]
+
+                | @tsv
+
+              ' "$TOP10_META" > "$TOP10_LIST"
+
+            else
+
+              touch "$TOP10_LIST"
+
+            fi
+
+            TOP10_FOUND="$(
+              wc -l < "$TOP10_LIST" \
+                | tr -d '[:space:]'
+            )"
+
+            echo "Historical videos selected: $TOP10_FOUND"
+
+            # ==================================================
+            # DOWNLOAD TOP 10
+            # ==================================================
+
+            if [ "$TOP10_FOUND" -gt 0 ]; then
+
+              POSITION=0
+
+              while IFS=$'\t' read -r VIEWS VIDEO_ID; do
+
+                POSITION=$((POSITION + 1))
+
+                TOP_URL="https://www.tiktok.com/@$USERNAME/video/$VIDEO_ID"
+
+                echo ""
+                echo "Top video #$POSITION"
+                echo "Views: $VIEWS"
+                echo "ID: $VIDEO_ID"
+
+                # Maximum 3 minutes per video.
+                if timeout 180 yt-dlp \
+                  --impersonate chrome \
+                  --socket-timeout 20 \
+                  --retries 2 \
+                  --fragment-retries 2 \
+                  --continue \
+                  --no-overwrites \
+                  --download-archive "$VIDEO_ARCHIVE" \
+                  --format "bv*+ba/b" \
+                  --format-sort-force \
+                  --format-sort "res,fps,vbr,tbr" \
+                  --merge-output-format mp4 \
+                  --print "after_move:SELECTED %(id)s | %(resolution)s | %(format_id)s | %(tbr)s kbps | %(filepath)s" \
+                  --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
+                  "$TOP_URL"
+                then
+
+                  echo "Top video #$POSITION processed."
+
+                else
+
+                  echo "::warning::Top video #$POSITION failed/timed out."
+
+                fi
+
+              done < "$TOP10_LIST"
+
+            else
+
+              echo "::warning::No Top 10 videos found for @$USERNAME"
+
+            fi
+
+            rm -f "$TOP10_META"
+            rm -f "$TOP10_LIST"
+
+          fi
+
+          # ==================================================
+          # NORMAL RECURRING VIDEO CHECK
+          #
+          # Only latest 15 posts.
+          #
+          # This is the major speed improvement.
+          # ==================================================
+
+          echo ""
+          echo "Checking newest $RECENT_LIMIT video posts..."
+
+          if timeout 180 yt-dlp \
+            --playlist-end "$RECENT_LIMIT" \
+            --impersonate chrome \
+            --socket-timeout 20 \
+            --retries 2 \
+            --fragment-retries 2 \
+            --ignore-errors \
+            --no-abort-on-error \
+            --continue \
+            --no-overwrites \
+            --download-archive "$VIDEO_ARCHIVE" \
+            --match-filters "timestamp >= $START_EPOCH" \
+            --format "bv*+ba/b" \
+            --format-sort-force \
+            --format-sort "res,fps,vbr,tbr" \
+            --merge-output-format mp4 \
+            --print "after_move:SELECTED %(id)s | %(resolution)s | %(format_id)s | %(tbr)s kbps | %(filepath)s" \
+            --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
+            "$TIKTOK_SOURCE"
+          then
+
+            echo "Video check finished."
+
+          else
+
+            EXIT_CODE=$?
+
+            echo "::warning::Video check timed out/failed for @$USERNAME (code $EXIT_CODE)"
+
+          fi
+
+          # ==================================================
+          # SECOND SOURCE + REAL MEDIA QUALITY CHECK
+          # Uses quality engine committed at repository root.
+          # Gallery-dl can expose a different TikTok media URL.
+          # ==================================================
+
+          if [ -f tiktok_quality_engine.py ]; then
+            python tiktok_quality_engine.py new \
+              --username "$USERNAME" \
+              --folder "$FOLDER" \
+              || echo "::warning::Quality comparison unavailable for @$USERNAME"
+          else
+            echo "::warning::Missing tiktok_quality_engine.py in repository root"
+          fi
+
+          # ==================================================
+          # REMOVE AUDIO-ONLY FILES
+          # ==================================================
+
+          find "$FOLDER" \
+            -maxdepth 1 \
+            -type f \
+            \( \
+              -iname "*.mp3" -o \
+              -iname "*.m4a" -o \
+              -iname "*.aac" -o \
+              -iname "*.opus" -o \
+              -iname "*.ogg" \
+            \) \
+            -delete
+
+          # ==================================================
+          # PHOTO / SLIDESHOW CHECK
+          #
+          # Only latest 15 posts.
+          # ==================================================
+
+          echo ""
+          echo "Checking newest $RECENT_LIMIT slideshow posts..."
+
+          if timeout 180 gallery-dl \
+            --post-range "1-$RECENT_LIMIT" \
+            --date-after "$START_EPOCH" \
+            --download-archive "$PHOTO_ARCHIVE" \
+            -D "$FOLDER" \
+            -f "{date:%Y%m%d}_{id}_{num:>02}.{extension}" \
+            -o tiktok.photos=true \
+            -o tiktok.videos=false \
+            -o tiktok.audio=false \
+            -o tiktok.covers=false \
+            "$PROFILE_URL"
+          then
+
+            echo "Slideshow check finished."
+
+          else
+
+            EXIT_CODE=$?
+
+            echo "::warning::Slideshow check timed out/failed for @$USERNAME (code $EXIT_CODE)"
+
+          fi
+
+          # ==================================================
+          # REMOVE AUDIO AGAIN
+          # ==================================================
+
+          find "$FOLDER" \
+            -maxdepth 1 \
+            -type f \
+            \( \
+              -iname "*.mp3" -o \
+              -iname "*.m4a" -o \
+              -iname "*.aac" -o \
+              -iname "*.opus" -o \
+              -iname "*.ogg" \
+            \) \
+            -delete
+
+          # ==================================================
+          # COUNT NEW MEDIA
+          # ==================================================
+
+          NEW_MEDIA_COUNT="$(
+            find "$FOLDER" \
+              -maxdepth 1 \
+              -type f \
+              \( \
+                -iname "*.mp4" -o \
+                -iname "*.mov" -o \
+                -iname "*.mkv" -o \
+                -iname "*.webm" -o \
+                -iname "*.jpg" -o \
+                -iname "*.jpeg" -o \
+                -iname "*.png" -o \
+                -iname "*.webp" -o \
+                -iname "*.avif" \
+              \) \
+              | wc -l
+          )"
+
+          NEW_MEDIA_COUNT="$(
+            echo "$NEW_MEDIA_COUNT" \
+              | tr -d '[:space:]'
+          )"
+
+          echo ""
+          echo "New media for @$USERNAME: $NEW_MEDIA_COUNT"
+
+          # ==================================================
+          # UPLOAD MEDIA
+          #
+          # Each matrix job has its own isolated runner,
+          # therefore BASE_FOLDER contains only this user.
+          #
+          # Profile stays flat.
+          # ==================================================
+
+          if [ "$NEW_MEDIA_COUNT" -gt 0 ]; then
+
+            echo "Uploading media for @$USERNAME..."
+
+            touch "$FOLDER"
+
+            if rclone copy \
+              "$BASE_FOLDER" \
+              "gdrive:TikTok" \
+              --filter "- /$USERNAME/archive.txt" \
+              --filter "- /$USERNAME/photo_archive.sqlite3" \
+              --filter "- /$USERNAME/photo_archive.sqlite3-wal" \
+              --filter "- /$USERNAME/photo_archive.sqlite3-shm" \
+              --filter "- /$USERNAME/start_epoch.txt" \
+              --filter "+ /$USERNAME/" \
+              --filter "+ /$USERNAME/**" \
+              --filter "- /**"
+            then
+
+              echo "Media uploaded."
+
+            else
+
+              echo "::warning::Media upload failed for @$USERNAME"
+
+            fi
+
+          else
+
+            echo "No new media for @$USERNAME"
+
+          fi
+
+          # ==================================================
+          # SAVE VIDEO ARCHIVE
+          # ==================================================
+
+          if ! rclone copyto \
+            "$VIDEO_ARCHIVE" \
+            "gdrive:TikTok/$USERNAME/archive.txt"
+          then
+
+            echo "::warning::Video archive upload failed for @$USERNAME"
+
+          fi
+
+          # ==================================================
+          # SAVE PHOTO ARCHIVE
+          # ==================================================
+
+          if [ -f "$PHOTO_ARCHIVE" ]; then
+
+            if ! rclone copyto \
+              "$PHOTO_ARCHIVE" \
+              "gdrive:TikTok/$USERNAME/photo_archive.sqlite3"
+            then
+
+              echo "::warning::Photo archive upload failed for @$USERNAME"
+
+            fi
+
+          fi
+
+          # ==================================================
+          # SAVE START EPOCH
+          # ==================================================
+
+          if ! rclone copyto \
+            "$START_FILE" \
+            "gdrive:TikTok/$USERNAME/start_epoch.txt"
+          then
+
+            echo "::warning::Start epoch upload failed for @$USERNAME"
+
+          fi
+
+          echo ""
+          echo "=========================================="
+          echo "Finished @$USERNAME"
+          echo "=========================================="
