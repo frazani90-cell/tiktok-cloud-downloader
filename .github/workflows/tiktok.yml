@@ -420,8 +420,11 @@ jobs:
                   --continue \
                   --no-overwrites \
                   --download-archive "$VIDEO_ARCHIVE" \
-                  --format "bv*[vcodec!=none]+ba/b[vcodec!=none]" \
+                  --format "bv*+ba/b" \
+                  --format-sort-force \
+                  --format-sort "res,fps,vbr,tbr" \
                   --merge-output-format mp4 \
+                  --print "after_move:SELECTED %(id)s | %(resolution)s | %(format_id)s | %(tbr)s kbps | %(filepath)s" \
                   --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
                   "$TOP_URL"
                 then
@@ -470,8 +473,11 @@ jobs:
             --no-overwrites \
             --download-archive "$VIDEO_ARCHIVE" \
             --match-filters "timestamp >= $START_EPOCH" \
-            --format "bv*[vcodec!=none]+ba/b[vcodec!=none]" \
+            --format "bv*+ba/b" \
+            --format-sort-force \
+            --format-sort "res,fps,vbr,tbr" \
             --merge-output-format mp4 \
+            --print "after_move:SELECTED %(id)s | %(resolution)s | %(format_id)s | %(tbr)s kbps | %(filepath)s" \
             --output "$FOLDER/%(upload_date)s_%(id)s.%(ext)s" \
             "$TIKTOK_SOURCE"
           then
