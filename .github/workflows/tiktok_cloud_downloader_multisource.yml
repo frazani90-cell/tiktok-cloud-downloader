@@ -59,6 +59,8 @@ jobs:
           - "sofia.badiali"
           - "melissamaggi"
           - "saraanigitoo"
+          - "gretazava"
+          
         
           
     env:
