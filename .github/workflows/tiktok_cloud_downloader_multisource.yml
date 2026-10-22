@@ -55,6 +55,7 @@ jobs:
           - "milevi5"
           - "a_668ufc"
           - "sara.nigito"
+          - "modelojuiinha"
         
           
     env:
