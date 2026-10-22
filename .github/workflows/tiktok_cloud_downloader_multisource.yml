@@ -56,6 +56,7 @@ jobs:
           - "a_668ufc"
           - "sara.nigito"
           - "modelojuiinha"
+          - "sofia.badiali"
         
           
     env:
