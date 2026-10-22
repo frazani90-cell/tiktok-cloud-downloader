@@ -383,7 +383,7 @@ jobs:
 
                 | reverse
 
-                | .[:10][]
+                | .[:20][]
 
                 | [
                     (.views | tostring),
